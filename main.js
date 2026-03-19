@@ -2,7 +2,8 @@ import './style.css'
 import typescriptLogo from './assets/typescript.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
-import { setupCounter } from './counter.ts' 
+// ✅ 这里引用的是刚才创建的 counter.js
+import { setupCounter } from './counter.js' 
 
 document.querySelector('#app').innerHTML = `
 <section id="center">
@@ -13,7 +14,7 @@ document.querySelector('#app').innerHTML = `
   </div>
   <div>
     <h1>Get started</h1>
-    <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
+    <p>Edit <code>src/main.js</code> and save to test HMR</p>
   </div>
   <button id="counter" type="button" class="counter"></button>
 </section>
@@ -52,9 +53,9 @@ document.querySelector('#app').innerHTML = `
 </section>
 <div class="ticks"></div>
 <section id="spacer"></section>
-`
+`;
 
-// 确保 counter 元素存在后再调用
+// 启动逻辑
 const counterElement = document.querySelector('#counter');
 if (counterElement) {
   setupCounter(counterElement);
