@@ -42,7 +42,6 @@ const CONFIG = {
 // ==========================================
 let camera, scene, renderer;
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-let canJump = false;
 let isSprinting = false;
 let isCrouching = false;
 
@@ -100,8 +99,10 @@ function init() {
     scene.background = new THREE.Color(0x0a0a14); // 深蓝色背景
     scene.fog = new THREE.FogExp2(0x0a0a14, 0.0002);
 
-    // 2. 创建相机
+    // ✅【修复点 1】必须先创建相机，才能调用 resetPlayer
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
+    
+    // 2. 重置玩家位置 (此时 camera 已存在)
     resetPlayer();
 
     // 3. 创建渲染器
@@ -113,18 +114,13 @@ function init() {
     // 4. 创建场景物体 (房子网格)
     createHouseLines();
     
-    // 5. 创建地面网格 (动态更新在 animate 中处理，这里先创建一个占位)
-    // 为了性能，我们手动绘制线条而不是用 GridHelper，以匹配 C# 逻辑
-    const gridMaterial = new THREE.LineBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.5 });
-    // 初始网格会在 animate 中根据相机位置动态生成
-    
-    // 6. 准星
+    // 5. 准星
     createCrosshair();
 
-    // 7. UI 层
+    // 6. UI 层
     createUI();
 
-    // 8. 事件监听
+    // 7. 事件监听
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('mousemove', onMouseMove);
@@ -140,15 +136,14 @@ function init() {
 
     document.addEventListener('pointerlockchange', () => {
         isMouseCaptured = document.pointerLockElement === renderer.domElement;
-        if (!isMouseCaptured && currentState === GAME_STATE.PLAYING) {
-            // 如果意外丢失锁定且在游戏中，暂停
-            // currentState = GAME_STATE.PAUSED; 
-            // updateUI();
-        }
+        // 如果意外丢失锁定且在游戏中，可以选择自动暂停或忽略
     });
 }
 
 function resetPlayer() {
+    // 防御性编程：确保 camera 存在
+    if (!camera) return;
+    
     camera.position.copy(CONFIG.spawnPosition);
     player.yaw = CONFIG.spawnYaw;
     player.pitch = 0;
@@ -233,7 +228,7 @@ function createCrosshair() {
     ctx.stroke();
     
     const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.SpriteMaterial({ map: texture });
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
     crosshair = new THREE.Sprite(material);
     crosshair.scale.set(0.5, 0.5, 1);
     scene.add(crosshair);
@@ -249,7 +244,7 @@ function createUI() {
     uiContainer.style.left = '0';
     uiContainer.style.width = '100%';
     uiContainer.style.height = '100%';
-    uiContainer.style.pointerEvents = 'none'; // 默认不拦截鼠标，让点击穿透到 Canvas
+    uiContainer.style.pointerEvents = 'none'; 
     uiContainer.style.fontFamily = '"Microsoft YaHei", Arial, sans-serif';
     document.body.appendChild(uiContainer);
 
@@ -277,7 +272,7 @@ function updateUI() {
         btn.style.justifyContent = 'center';
         btn.style.fontSize = '24px';
         btn.style.cursor = 'pointer';
-        btn.style.pointerEvents = 'auto'; // 按钮需要接收点击
+        btn.style.pointerEvents = 'auto';
         btn.onmouseenter = () => {
             btn.style.backgroundColor = 'rgba(60, 60, 60, 0.9)';
             btn.style.borderColor = 'white';
@@ -289,7 +284,7 @@ function updateUI() {
             btn.style.color = 'lightgray';
         };
         btn.onclick = (e) => {
-            e.stopPropagation(); // 防止触发 Canvas 点击
+            e.stopPropagation();
             onClick();
         };
         return btn;
@@ -312,7 +307,7 @@ function updateUI() {
         uiContainer.appendChild(title);
 
         uiContainer.appendChild(createButton("开始游戏", 300, startGame));
-        uiContainer.appendChild(createButton("退出游戏", 370, () => window.close())); // 浏览器不能真正关闭，仅作演示
+        uiContainer.appendChild(createButton("退出游戏", 370, () => alert("请关闭浏览器标签页")));
     } 
     // 暂停菜单
     else if (currentState === GAME_STATE.PAUSED) {
@@ -336,7 +331,14 @@ function updateUI() {
     // 背包界面
     else if (currentState === GAME_STATE.INVENTORY) {
         uiContainer.style.backgroundColor = 'rgba(0,0,0,0.3)';
-        uiContainer.style.pointerEvents = 'auto';
+        uiContainer.style.pointerEvents = 'auto'; // 允许点击
+
+        // ✅【修复点 2】添加点击背景关闭背包的功能
+        uiContainer.onclick = (e) => {
+            if (e.target === uiContainer) {
+                toggleInventory();
+            }
+        };
 
         const invBox = document.createElement('div');
         invBox.style.position = 'absolute';
@@ -351,6 +353,8 @@ function updateUI() {
         invBox.style.flexWrap = 'wrap';
         invBox.style.padding = '20px';
         invBox.style.boxSizing = 'border-box';
+        // 防止点击背包盒子本身触发关闭
+        invBox.onclick = (e) => e.stopPropagation(); 
         
         const title = document.createElement('div');
         title.innerText = "背包 (按 1-9 切换物品)";
@@ -372,14 +376,17 @@ function updateUI() {
             slot.style.flexDirection = 'column';
             slot.style.alignItems = 'center';
             slot.style.justifyContent = 'center';
-            slot.style.color = '#' + item.color.toString(16).padStart(6, '0');
+            // 修复颜色转换可能出现的单字符问题
+            const hexColor = item.color.toString(16).padStart(6, '0');
+            slot.style.color = '#' + hexColor;
             slot.style.fontSize = '14px';
             slot.style.textAlign = 'center';
             slot.style.cursor = 'pointer';
             
             slot.innerHTML = `<span>${item.name}</span><span style="font-size:10px;color:gray">[${index + 1}]</span>`;
             
-            slot.onclick = () => {
+            slot.onclick = (e) => {
+                e.stopPropagation();
                 selectedSlotIndex = index;
                 updateUI();
             };
@@ -391,19 +398,21 @@ function updateUI() {
         
         // 底部提示
         const hint = document.createElement('div');
+        const hintColor = inventory[selectedSlotIndex].color.toString(16).padStart(6, '0');
         hint.innerText = `当前装备：${inventory[selectedSlotIndex].name}`;
         hint.style.position = 'absolute';
         hint.style.bottom = '20px';
         hint.style.left = '20px';
-        hint.style.color = '#' + inventory[selectedSlotIndex].color.toString(16).padStart(6, '0');
+        hint.style.color = '#' + hintColor;
         hint.style.fontSize = '20px';
         hint.style.fontWeight = 'bold';
         hint.style.backgroundColor = 'rgba(0,0,0,0.5)';
         hint.style.padding = '5px 10px';
+        hint.style.pointerEvents = 'none';
         uiContainer.appendChild(hint);
     }
     
-    // 游戏中的 HUD (始终显示在游戏状态)
+    // 游戏中的 HUD
     if (currentState === GAME_STATE.PLAYING || currentState === GAME_STATE.INVENTORY) {
         const info = document.createElement('div');
         info.style.position = 'absolute';
@@ -413,6 +422,7 @@ function updateUI() {
         info.style.fontSize = '14px';
         info.style.fontFamily = 'Arial';
         info.style.textShadow = '1px 1px 2px black';
+        info.style.pointerEvents = 'none';
         info.innerHTML = `
             位置：${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}<br>
             WASD:移动 | Shift:跑 | Ctrl:蹲 | Space:跳<br>
@@ -471,7 +481,6 @@ function onKeyDown(event) {
         case 'ControlLeft': 
             if (!isCrouching) {
                 isCrouching = true;
-                // 蹲下时强制降低高度
                 camera.position.y = Math.max(camera.position.y, CONFIG.groundY + CONFIG.playerHeightCrouch);
                 player.velocity.y = 0;
             }
@@ -491,11 +500,9 @@ function onKeyDown(event) {
             } else if (currentState === GAME_STATE.PAUSED) {
                 goToMenu();
             } else if (currentState === GAME_STATE.MENU) {
-                // 浏览器限制无法直接关闭，这里只做提示
-                alert("按 F11 退出全屏，或直接关闭标签页");
+                // 浏览器限制无法直接关闭
             }
             break;
-        // 数字键切换物品
         case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': 
         case 'Digit5': case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9':
             const index = parseInt(event.code.replace('Digit', '')) - 1;
@@ -516,7 +523,6 @@ function onKeyUp(event) {
         case 'ShiftLeft': isSprinting = false; break;
         case 'ControlLeft': 
             isCrouching = false; 
-            // 站立恢复高度逻辑在 updatePhysics 中处理
             break;
     }
 }
@@ -530,31 +536,31 @@ function onMouseMove(event) {
     player.yaw -= movementX * CONFIG.mouseSensitivity;
     player.pitch -= movementY * CONFIG.mouseSensitivity;
 
-    // 限制垂直视角
     player.pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, player.pitch));
 
     updateCameraRotation();
 }
 
 function updateCameraRotation() {
-    // 欧拉角顺序 YXZ (先绕Y转，再绕X转)
+    if (!camera) return;
     const euler = new THREE.Euler(0, 0, 0, 'YXZ');
     euler.set(player.pitch, player.yaw, 0);
     camera.quaternion.setFromEuler(euler);
     
-    // 更新准星位置跟随相机
-    crosshair.position.copy(camera.position);
-    crosshair.translateZ(-1); // 稍微向前一点避免 z-fighting
+    if (crosshair) {
+        crosshair.position.copy(camera.position);
+        crosshair.translateZ(-1);
+    }
 }
 
 function onMouseClick(event) {
-    // UI 点击已经在 HTML 元素中处理，这里主要处理游戏内交互（如果有）
     if (currentState === GAME_STATE.PLAYING && !isMouseCaptured) {
         document.body.requestPointerLock();
     }
 }
 
 function onWindowResize() {
+    if (!camera || !renderer) return;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -576,14 +582,11 @@ function checkHouseCollision(pos) {
     const minY = c.y - hh;
     const maxY = c.y + hh;
 
-    // 高度豁免
     if (pos.y < minY - 5 || pos.y - CONFIG.playerHeightStand > maxY + 5) return false;
 
-    // 包围盒豁免
     if (pos.x < minX - CONFIG.playerRadius || pos.x > maxX + CONFIG.playerRadius ||
         pos.z < minZ - CONFIG.playerRadius || pos.z > maxZ + CONFIG.playerRadius) return false;
 
-    // 门口豁免
     const dw = CONFIG.doorWidth / 2;
     const left = c.x - dw;
     const right = c.x + dw;
@@ -591,7 +594,6 @@ function checkHouseCollision(pos) {
     const inZ = pos.z > maxZ - 2.0 && pos.z < maxZ + 2.0;
     if (inX && inZ) return false;
 
-    // 墙壁判定
     const onSide = (pos.x <= minX + CONFIG.playerRadius || pos.x >= maxX - CONFIG.playerRadius);
     const onFrontBack = (pos.z <= minZ + CONFIG.playerRadius || pos.z >= maxZ - CONFIG.playerRadius);
 
@@ -604,13 +606,10 @@ function checkHouseCollision(pos) {
 function updatePhysics(delta) {
     if (currentState !== GAME_STATE.PLAYING) return;
 
-    // 姿态处理
     const targetHeight = isCrouching ? CONFIG.playerHeightCrouch : CONFIG.playerHeightStand;
     if (isCrouching) {
         camera.position.y = Math.max(camera.position.y, CONFIG.groundY + targetHeight);
     } else {
-        // 站起时如果头顶有东西（简单处理：不允许穿过天花板），这里简化为直接恢复
-        // 实际游戏中需要检测头顶碰撞
         if (player.isGrounded) {
              camera.position.y = CONFIG.groundY + targetHeight;
         }
@@ -618,7 +617,6 @@ function updatePhysics(delta) {
 
     const speed = isCrouching ? CONFIG.crouchSpeed : (isSprinting ? CONFIG.sprintSpeed : CONFIG.walkSpeed);
 
-    // 计算移动方向
     player.direction.set(0, 0, 0);
     if (moveForward) player.direction.z -= 1;
     if (moveBackward) player.direction.z += 1;
@@ -628,30 +626,27 @@ function updatePhysics(delta) {
     if (player.direction.lengthSq() > 0) {
         player.direction.normalize();
         
-        // 将方向转换到世界坐标 (基于 Yaw)
         const sinY = Math.sin(player.yaw);
         const cosY = Math.cos(player.yaw);
         
         const moveX = (player.direction.x * cosY - player.direction.z * sinY) * speed * delta;
         const moveZ = (player.direction.x * sinY + player.direction.z * cosY) * speed * delta;
 
-        // X 轴碰撞检测
         let nextX = camera.position.x + moveX;
         if (checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) {
-            moveX = 0;
+            // X 轴碰撞，禁止移动
+        } else {
+            camera.position.x += moveX;
         }
         
-        // Z 轴碰撞检测
         let nextZ = camera.position.z + moveZ;
-        if (checkHouseCollision(new THREE.Vector3(camera.position.x + moveX, camera.position.y, nextZ))) {
-            moveZ = 0;
+        if (checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) {
+            // Z 轴碰撞，禁止移动
+        } else {
+            camera.position.z += moveZ;
         }
-
-        camera.position.x += moveX;
-        camera.position.z += moveZ;
     }
 
-    // 重力与跳跃
     player.velocity.y -= CONFIG.gravity * delta;
     camera.position.y += player.velocity.y * delta;
 
@@ -669,37 +664,15 @@ function updatePhysics(delta) {
 // 8. 动态网格生成 (Dynamic Grid)
 // ==========================================
 function updateGrid() {
-    // 清除旧网格 (简单做法：每次重绘前清空 group，或者重用几何体)
-    // 为了性能和代码简洁，我们这里采用每帧重新创建线条的方式 (类似 C# 逻辑)
-    // 优化：实际项目中应使用 InstancedMesh 或复用 BufferGeometry
-    
-    // 移除旧的网格线
-    while(scene.children.length > 0){ 
-        // 只移除我们添加的特定网格，保留房子和准星等
-        // 这里为了简单，我们用一个专门的 Group 来管理网格
-        break; 
-    }
-    
-    // 由于 Three.js 移除对象比较耗时，我们改用一种更聪明的方法：
-    // 创建一个大的静态网格，然后移动它？不，C# 逻辑是动态生成可见部分。
-    // 为了完全复刻 C# 逻辑且保持性能，我们只在远处画线。
-    
-    // 简单实现：使用 Three.js 自带的 GridHelper 并移动它到玩家脚下
     if (!gridHelper) {
         gridHelper = new THREE.GridHelper(CONFIG.gridRadius * 2, CONFIG.gridStep, 0x444444, 0x444444);
-        gridHelper.position.y = 0; // 地面 Y=0? C# 中地面是 Y=GroundY? 
-        // C# 中 GroundY = 5.0f, 但房子中心 Y=15, 半径 15 -> 房子底部 Y=0.
-        // 所以网格应该在 Y=0
+        gridHelper.position.y = 0;
         scene.add(gridHelper);
     }
     
-    // 让网格跟随玩家 XZ 移动，产生无限地面的错觉
-    if (gridHelper) {
-        gridHelper.position.x = camera.position.x;
-        gridHelper.position.z = camera.position.z;
-        // 对齐网格步长
-        gridHelper.position.x = Math.floor(gridHelper.position.x / CONFIG.gridStep) * CONFIG.gridStep;
-        gridHelper.position.z = Math.floor(gridHelper.position.z / CONFIG.gridStep) * CONFIG.gridStep;
+    if (gridHelper && camera) {
+        gridHelper.position.x = Math.floor(camera.position.x / CONFIG.gridStep) * CONFIG.gridStep;
+        gridHelper.position.z = Math.floor(camera.position.z / CONFIG.gridStep) * CONFIG.gridStep;
     }
 }
 
@@ -715,13 +688,12 @@ function animate() {
 
     if (currentState === GAME_STATE.PLAYING) {
         updatePhysics(delta);
-        updateCameraRotation(); // 确保准星跟随
+        updateCameraRotation();
     }
     
     updateGrid();
-
-    // 雾效动态调整 (模拟 C# 中的 alpha 变化)
-    // Three.js FogExp2 自动处理距离模糊
     
-    renderer.render(scene, camera);
+    if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+    }
 }
