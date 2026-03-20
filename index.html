@@ -2,17 +2,49 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- ✅ 修改了 favicon 路径：从 /favicon.svg 改为 ./favicon.svg (相对路径) -->
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>my-web-3d-game</title>
+    <title>Modular 3D Engine</title>
     
-    <!-- ✅ 新增了 CSS 链接：告诉浏览器加载样式表 -->
-    <link rel="stylesheet" href="./style.css">
-    
-    <script type="module" src="main.js"></script>
+    <!-- ✅ 1. 引入 Three.js (通过 importmap) -->
+    <!-- 这样 main.js 里的 import * as THREE from 'three' 才能正常工作 -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+
+    <!-- ✅ 2. 基础样式重置 -->
+    <!-- 移除浏览器默认边距，防止出现滚动条，让游戏全屏 -->
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden; /* 禁止滚动 */
+        background-color: #0a0a14; /* 与游戏背景色一致，防止加载闪烁 */
+        font-family: "Microsoft YaHei", Arial, sans-serif;
+      }
+      canvas {
+        display: block; /* 消除 canvas 底部的微小间隙 */
+      }
+      /* 确保 UI 层能覆盖在 canvas 上 */
+      div {
+        box-sizing: border-box;
+      }
+    </style>
   </head>
+  
   <body>
-    <div id="app"></div>
+    <!-- ✅ 3. 删除了 <div id="app"> -->
+    <!-- 原因：新的 main.js 会直接 document.body.appendChild(renderer.domElement) -->
+    <!-- 保留这个 div 反而可能导致布局问题或多余的空隙 -->
+
+    <!-- ✅ 4. 删除了 <link rel="stylesheet" href="./style.css"> -->
+    <!-- 原因：新的 main.js 使用 JS 动态生成所有 UI 样式，不再依赖外部 CSS 文件 -->
+    <!-- 如果你以后想加自定义 CSS，可以再加回来 -->
+
+    <!-- ✅ 5. 加载主程序 -->
+    <script type="module" src="main.js"></script>
   </body>
 </html>
