@@ -32,8 +32,8 @@ const CONFIG = {
     doorWidth: 15.0,
     doorHeight: 22.0,
     
-    houseCenter: new THREE.Vector3(0, 15, -20), // HouseHeight / 2
-    spawnPosition: new THREE.Vector3(0, 6, -40), // GroundY + PlayerHeightStand
+    houseCenter: new THREE.Vector3(0, 15, -20),
+    spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI
 };
 
@@ -45,7 +45,6 @@ let moveForward = false, moveBackward = false, moveLeft = false, moveRight = fal
 let isSprinting = false;
 let isCrouching = false;
 
-// 玩家状态
 const player = {
     velocity: new THREE.Vector3(),
     direction: new THREE.Vector3(),
@@ -54,7 +53,6 @@ const player = {
     isGrounded: true
 };
 
-// 游戏状态
 const GAME_STATE = {
     MENU: 0,
     PLAYING: 1,
@@ -64,7 +62,6 @@ const GAME_STATE = {
 let currentState = GAME_STATE.MENU;
 let isMouseCaptured = false;
 
-// 背包数据
 const inventory = [
     { name: "铁剑", color: 0xC0C0C0 },
     { name: "治疗药水", color: 0xFF0000 },
@@ -78,13 +75,11 @@ const inventory = [
 ];
 let selectedSlotIndex = 0;
 
-// 场景对象
 let houseLinesGroup;
 let gridHelper;
 let crosshair;
 let uiContainer;
 
-// 时间控制
 let prevTime = performance.now();
 
 // ==========================================
@@ -96,54 +91,63 @@ animate();
 function init() {
     // 1. 创建场景
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0a14); // 深蓝色背景
+    scene.background = new THREE.Color(0x0a0a14);
     scene.fog = new THREE.FogExp2(0x0a0a14, 0.0002);
 
-    // ✅【修复点 1】必须先创建相机，才能调用 resetPlayer
+    // 2. 创建相机
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
     
-    // 2. 重置玩家位置 (此时 camera 已存在)
+    // 3. 重置玩家
     resetPlayer();
 
-    // 3. 创建渲染器
+    // 4. 创建渲染器
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     document.body.appendChild(renderer.domElement);
 
-    // 4. 创建场景物体 (房子网格)
+    // 5. 创建场景物体
     createHouseLines();
-    
-    // 5. 准星
     createCrosshair();
-
-    // 6. UI 层
     createUI();
 
-    // 7. 事件监听
+    // ✅【关键修复】事件监听绑定到 Canvas (renderer.domElement) 而不是 document
+    const canvas = renderer.domElement;
+
+    // 键盘事件依然绑定在 document 上
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('click', onMouseClick);
     window.addEventListener('resize', onWindowResize);
-    
-    // 指针锁定处理
-    renderer.domElement.addEventListener('click', () => {
-        if (currentState === GAME_STATE.PLAYING && !isMouseCaptured) {
-            document.body.requestPointerLock();
-        }
-    });
 
-    document.addEventListener('pointerlockchange', () => {
-        isMouseCaptured = document.pointerLockElement === renderer.domElement;
-        // 如果意外丢失锁定且在游戏中，可以选择自动暂停或忽略
-    });
+    // ✅ 鼠标移动事件必须绑定在 Canvas 上才能正确获取 movementX/Y
+    canvas.addEventListener('mousemove', onMouseMove, false);
+    
+    // 点击 Canvas 请求锁定
+    canvas.addEventListener('click', () => {
+        if (currentState === GAME_STATE.PLAYING && !isMouseCaptured) {
+            canvas.requestPointerLock();
+        }
+    }, false);
+
+    // ✅ 监听指针锁定状态变化
+    document.addEventListener('pointerlockchange', onPointerLockChange, false);
+    document.addEventListener('mozpointerlockchange', onPointerLockChange, false);
+}
+
+function onPointerLockChange() {
+    const canvas = renderer.domElement;
+    if (document.pointerLockElement === canvas || document.mozPointerLockElement === canvas) {
+        console.log("✅ 指针锁定成功！视角控制已激活。");
+        isMouseCaptured = true;
+    } else {
+        console.log("❌ 指针锁定解除。");
+        isMouseCaptured = false;
+        // 如果是在游戏中意外解除，可以选择暂停，这里暂时不自动暂停以免干扰
+    }
 }
 
 function resetPlayer() {
-    // 防御性编程：确保 camera 存在
     if (!camera) return;
-    
     camera.position.copy(CONFIG.spawnPosition);
     player.yaw = CONFIG.spawnYaw;
     player.pitch = 0;
@@ -164,7 +168,6 @@ function createHouseLines() {
     const hh = CONFIG.houseHeight / 2;
     const c = CONFIG.houseCenter;
 
-    // 定义8个顶点
     const v = [
         new THREE.Vector3(c.x - hl, c.y - hh, c.z - hd),
         new THREE.Vector3(c.x + hl, c.y - hh, c.z - hd),
@@ -176,15 +179,14 @@ function createHouseLines() {
         new THREE.Vector3(c.x - hl, c.y + hh, c.z + hd)
     ];
 
-    // 12条边 (黄色)
     const edges = [
         [0, 1], [1, 2], [2, 3], [3, 0],
         [4, 5], [5, 6], [6, 7], [7, 4],
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffdc32 }); // 黄色
-    const doorMaterial = new THREE.LineBasicMaterial({ color: 0xff5050 }); // 红色
+    const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffdc32 });
+    const doorMaterial = new THREE.LineBasicMaterial({ color: 0xff5050 });
 
     edges.forEach(pair => {
         const points = [v[pair[0]], v[pair[1]]];
@@ -193,7 +195,6 @@ function createHouseLines() {
         houseLinesGroup.add(line);
     });
 
-    // 门框 (红色)
     const groundY = c.y - hh;
     const doorTop = groundY + CONFIG.doorHeight;
     const frontZ = c.z + hd;
@@ -204,9 +205,7 @@ function createHouseLines() {
     const dTL = new THREE.Vector3(c.x - dw, doorTop, frontZ);
     const dTR = new THREE.Vector3(c.x + dw, doorTop, frontZ);
 
-    const doorEdges = [
-        [dBL, dTL], [dTL, dTR], [dTR, dBR]
-    ];
+    const doorEdges = [[dBL, dTL], [dTL, dTR], [dTR, dBR]];
 
     doorEdges.forEach(pair => {
         const geometry = new THREE.BufferGeometry().setFromPoints(pair);
@@ -247,14 +246,12 @@ function createUI() {
     uiContainer.style.pointerEvents = 'none'; 
     uiContainer.style.fontFamily = '"Microsoft YaHei", Arial, sans-serif';
     document.body.appendChild(uiContainer);
-
     updateUI();
 }
 
 function updateUI() {
     uiContainer.innerHTML = '';
     
-    // 辅助函数：创建按钮
     const createButton = (text, y, onClick) => {
         const btn = document.createElement('div');
         btn.innerText = text;
@@ -290,7 +287,6 @@ function updateUI() {
         return btn;
     };
 
-    // 菜单
     if (currentState === GAME_STATE.MENU) {
         uiContainer.style.backgroundColor = 'rgba(0,0,0,0.7)';
         uiContainer.style.pointerEvents = 'auto';
@@ -309,7 +305,6 @@ function updateUI() {
         uiContainer.appendChild(createButton("开始游戏", 300, startGame));
         uiContainer.appendChild(createButton("退出游戏", 370, () => alert("请关闭浏览器标签页")));
     } 
-    // 暂停菜单
     else if (currentState === GAME_STATE.PAUSED) {
         uiContainer.style.backgroundColor = 'rgba(0,0,0,0.5)';
         uiContainer.style.pointerEvents = 'auto';
@@ -328,16 +323,12 @@ function updateUI() {
         uiContainer.appendChild(createButton("主页面", 320, goToMenu));
         uiContainer.appendChild(createButton("设置", 390, () => alert("设置功能演示")));
     }
-    // 背包界面
     else if (currentState === GAME_STATE.INVENTORY) {
         uiContainer.style.backgroundColor = 'rgba(0,0,0,0.3)';
-        uiContainer.style.pointerEvents = 'auto'; // 允许点击
+        uiContainer.style.pointerEvents = 'auto';
 
-        // ✅【修复点 2】添加点击背景关闭背包的功能
         uiContainer.onclick = (e) => {
-            if (e.target === uiContainer) {
-                toggleInventory();
-            }
+            if (e.target === uiContainer) toggleInventory();
         };
 
         const invBox = document.createElement('div');
@@ -353,7 +344,6 @@ function updateUI() {
         invBox.style.flexWrap = 'wrap';
         invBox.style.padding = '20px';
         invBox.style.boxSizing = 'border-box';
-        // 防止点击背包盒子本身触发关闭
         invBox.onclick = (e) => e.stopPropagation(); 
         
         const title = document.createElement('div');
@@ -376,7 +366,6 @@ function updateUI() {
             slot.style.flexDirection = 'column';
             slot.style.alignItems = 'center';
             slot.style.justifyContent = 'center';
-            // 修复颜色转换可能出现的单字符问题
             const hexColor = item.color.toString(16).padStart(6, '0');
             slot.style.color = '#' + hexColor;
             slot.style.fontSize = '14px';
@@ -390,13 +379,11 @@ function updateUI() {
                 selectedSlotIndex = index;
                 updateUI();
             };
-            
             invBox.appendChild(slot);
         });
 
         uiContainer.appendChild(invBox);
         
-        // 底部提示
         const hint = document.createElement('div');
         const hintColor = inventory[selectedSlotIndex].color.toString(16).padStart(6, '0');
         hint.innerText = `当前装备：${inventory[selectedSlotIndex].name}`;
@@ -412,7 +399,6 @@ function updateUI() {
         uiContainer.appendChild(hint);
     }
     
-    // 游戏中的 HUD
     if (currentState === GAME_STATE.PLAYING || currentState === GAME_STATE.INVENTORY) {
         const info = document.createElement('div');
         info.style.position = 'absolute';
@@ -435,14 +421,20 @@ function updateUI() {
 function startGame() {
     currentState = GAME_STATE.PLAYING;
     resetPlayer();
-    document.body.requestPointerLock();
     updateUI();
+    
+    // ✅ 延迟请求锁定，确保 UI 更新完成
+    setTimeout(() => {
+        renderer.domElement.requestPointerLock();
+    }, 50);
 }
 
 function resumeGame() {
     currentState = GAME_STATE.PLAYING;
-    document.body.requestPointerLock();
     updateUI();
+    setTimeout(() => {
+        renderer.domElement.requestPointerLock();
+    }, 50);
 }
 
 function goToMenu() {
@@ -457,7 +449,9 @@ function toggleInventory() {
         document.exitPointerLock();
     } else if (currentState === GAME_STATE.INVENTORY) {
         currentState = GAME_STATE.PLAYING;
-        document.body.requestPointerLock();
+        setTimeout(() => {
+            renderer.domElement.requestPointerLock();
+        }, 50);
     }
     updateUI();
 }
@@ -481,7 +475,7 @@ function onKeyDown(event) {
         case 'ControlLeft': 
             if (!isCrouching) {
                 isCrouching = true;
-                camera.position.y = Math.max(camera.position.y, CONFIG.groundY + CONFIG.playerHeightCrouch);
+                if(camera) camera.position.y = Math.max(camera.position.y, CONFIG.groundY + CONFIG.playerHeightCrouch);
                 player.velocity.y = 0;
             }
             break;
@@ -499,8 +493,6 @@ function onKeyDown(event) {
                 updateUI();
             } else if (currentState === GAME_STATE.PAUSED) {
                 goToMenu();
-            } else if (currentState === GAME_STATE.MENU) {
-                // 浏览器限制无法直接关闭
             }
             break;
         case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': 
@@ -521,17 +513,21 @@ function onKeyUp(event) {
         case 'ArrowDown': case 'KeyS': moveBackward = false; break;
         case 'ArrowRight': case 'KeyD': moveRight = false; break;
         case 'ShiftLeft': isSprinting = false; break;
-        case 'ControlLeft': 
-            isCrouching = false; 
-            break;
+        case 'ControlLeft': isCrouching = false; break;
     }
 }
 
 function onMouseMove(event) {
-    if (currentState !== GAME_STATE.PLAYING || !isMouseCaptured) return;
+    // ✅ 只有当游戏进行中且鼠标已锁定时才处理视角
+    if (currentState !== GAME_STATE.PLAYING || !isMouseCaptured) {
+        return;
+    }
 
-    const movementX = event.movementX || 0;
-    const movementY = event.movementY || 0;
+    const movementX = event.movementX || event.mozMovementX || 0;
+    const movementY = event.movementY || event.mozMovementY || 0;
+
+    // 如果 movement 为 0 但鼠标在动，可能是兼容性问题，但通常锁定后会有值
+    if (movementX === 0 && movementY === 0) return;
 
     player.yaw -= movementX * CONFIG.mouseSensitivity;
     player.pitch -= movementY * CONFIG.mouseSensitivity;
@@ -554,8 +550,9 @@ function updateCameraRotation() {
 }
 
 function onMouseClick(event) {
+    // 此函数现在主要作为备用，主要逻辑已在 init 中的 canvas click 监听里
     if (currentState === GAME_STATE.PLAYING && !isMouseCaptured) {
-        document.body.requestPointerLock();
+        renderer.domElement.requestPointerLock();
     }
 }
 
@@ -633,16 +630,12 @@ function updatePhysics(delta) {
         const moveZ = (player.direction.x * sinY + player.direction.z * cosY) * speed * delta;
 
         let nextX = camera.position.x + moveX;
-        if (checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) {
-            // X 轴碰撞，禁止移动
-        } else {
+        if (!checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) {
             camera.position.x += moveX;
         }
         
         let nextZ = camera.position.z + moveZ;
-        if (checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) {
-            // Z 轴碰撞，禁止移动
-        } else {
+        if (!checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) {
             camera.position.z += moveZ;
         }
     }
