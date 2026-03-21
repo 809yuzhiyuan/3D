@@ -7,44 +7,45 @@ const CONFIG = {
     windowWidth: window.innerWidth,
     windowHeight: window.innerHeight,
     gridRadius: 5000,
-    gridStep: 50,
+    gridStep: 100, // 稍微加大网格间距，减少视觉杂乱
     nearClip: 1.0,
     fov: Math.PI / 4,
     
     // 玩家属性
-    playerHeightStand: 1.0,
-    playerHeightCrouch: 0.5,
+    playerHeightStand: 1.7, // 调整为正常人身高
+    playerHeightCrouch: 0.9,
     playerRadius: 0.4,
-    groundY: 5.0,
+    groundY: 0.0, // 地面归零，更符合直觉
     
-    // 移动参数
-    walkSpeed: 15.0,
-    sprintSpeed: 50.0,
-    crouchSpeed: 1.6,
-    jumpForce: 15.0,
-    gravity: 50.0,
+    // 移动参数 (手感优化：增加惯性平滑)
+    walkSpeed: 12.0,
+    sprintSpeed: 40.0,
+    crouchSpeed: 2.0,
+    jumpForce: 12.0,
+    gravity: 30.0,
     mouseSensitivity: 0.002,
+    smoothFactor: 0.15, // 移动平滑系数
     
     // 房子配置
     houseLength: 100.0,
-    houseHeight: 30.0,
+    houseHeight: 40.0,
     houseDepth: 80.0,
     doorWidth: 15.0,
-    doorHeight: 22.0,
+    doorHeight: 25.0,
     
-    houseCenter: new THREE.Vector3(0, 15, -20),
-    spawnPosition: new THREE.Vector3(0, 6, -40),
+    houseCenter: new THREE.Vector3(0, 20, -50),
+    spawnPosition: new THREE.Vector3(0, 2, -80),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置
-    bgColor: 0x000000,       // 纯黑
-    fogColor: 0x000000,
-    fogDensity: 0.0002,      // 雾非常淡，几乎不影响远处线条
+    // ✅ 视觉配置：赛博朋克风格
+    bgColor: 0x050505,       // 极深灰，比纯黑更有质感
+    fogColor: 0x050505,
+    fogDensity: 0.0015,      // 适度的雾，增加景深
     
-    // 🔥 颜色配置：纯白最亮
-    lineColorHouse: 0xffffff, 
-    lineColorDoor: 0xffaa00,  
-    lineColorGrid: 0x444444   
+    // 🔥 霓虹颜色配置
+    neonHouse: 0x00ffff,     // 青色霓虹
+    neonDoor: 0xff0055,      // 洋红霓虹
+    neonGrid: 0x222222       // 暗灰网格，不抢戏
 };
 
 // ==========================================
@@ -55,9 +56,11 @@ let moveForward = false, moveBackward = false, moveLeft = false, moveRight = fal
 let isSprinting = false;
 let isCrouching = false;
 
+// 平滑移动变量
+const currentVelocity = new THREE.Vector3();
+const targetVelocity = new THREE.Vector3();
+
 const player = {
-    velocity: new THREE.Vector3(),
-    direction: new THREE.Vector3(),
     yaw: CONFIG.spawnYaw,
     pitch: 0,
     isGrounded: true
@@ -73,19 +76,19 @@ let currentState = GAME_STATE.MENU;
 let isMouseCaptured = false;
 
 const inventory = [
-    { name: "铁剑", color: 0xC0C0C0 },
-    { name: "治疗药水", color: 0xFF0000 },
-    { name: "地图", color: 0x8B4513 },
-    { name: "钥匙", color: 0xFFD700 },
-    { name: "盾牌", color: 0x808080 },
-    { name: "食物", color: 0xFFA500 },
-    { name: "宝石", color: 0x00FFFF },
-    { name: "卷轴", color: 0x800080 },
+    { name: "光剑", color: 0x00ffff },
+    { name: "纳米药", color: 0x00ff00 },
+    { name: "全息图", color: 0xffff00 },
+    { name: "密钥", color: 0xff0055 },
+    { name: "护盾", color: 0x0000ff },
+    { name: "能量块", color: 0xffaa00 },
+    { name: "芯片", color: 0xff00ff },
+    { name: "数据盘", color: 0xffffff },
     { name: "空槽", color: 0x333333 }
 ];
 let selectedSlotIndex = 0;
 
-let houseLinesGroup;
+let neonGroup; // 存放所有霓虹线条
 let gridHelper;
 let crosshair;
 let uiContainer;
@@ -93,7 +96,7 @@ let uiContainer;
 let prevTime = performance.now();
 
 // ==========================================
-// 3. 初始化 (Initialization)
+// 3. 初始化 (Initialization) - ✅ 优化渲染设置
 // ==========================================
 init();
 animate();
@@ -101,32 +104,30 @@ animate();
 function init() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.bgColor);
-    // 雾气保留，但密度很低，增加深邃感但不遮挡线条
     scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity); 
 
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
     
     resetPlayer();
 
-    // ✅ 关键：关闭抗锯齿 (antialias: false) 
-    // 原因：在某些浏览器/驱动中，抗锯齿会让细线变得模糊且半透明，导致变暗。
-    // 关闭后，线条会是锐利的像素点，亮度最高（100% 不透明）。
+    // ✅ 关键优化：开启抗锯齿 + 高精度像素比
+    // 现在的显卡性能足够，开启抗锯齿能让线条边缘平滑，消除闪烁
     renderer = new THREE.WebGLRenderer({ 
-        antialias: false, 
-        powerPreference: "high-performance"
+        antialias: true, 
+        powerPreference: "high-performance",
+        alpha: false
     }); 
     
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制最大像素比，防止过糊
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 禁用色调映射，确保 0xffffff 就是屏幕能显示的最亮
+    // 色调映射：使用 Reinhard 或 Uncharted 可以让高光更自然，但为了纯霓虹风，我们用 NoToneMapping + 手动发光
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     
     document.body.appendChild(renderer.domElement);
 
-    createHouseLines();
-    createGrid();
+    createNeonWorld();
     createCrosshair();
     createUI();
 
@@ -162,19 +163,19 @@ function resetPlayer() {
     camera.position.copy(CONFIG.spawnPosition);
     player.yaw = CONFIG.spawnYaw;
     player.pitch = 0;
-    player.velocity.set(0, 0, 0);
+    currentVelocity.set(0, 0, 0);
     player.isGrounded = true;
     updateCameraRotation();
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 核心修复：回归 LineSegments + 锐利渲染
+// 4. 场景构建 - ✅ 核心：双层霓虹光管技术
 // ==========================================
-function createHouseLines() {
-    houseLinesGroup = new THREE.Group();
-    houseLinesGroup.renderOrder = 10; 
-    scene.add(houseLinesGroup);
+function createNeonWorld() {
+    neonGroup = new THREE.Group();
+    scene.add(neonGroup);
 
+    // --- 1. 创建房子数据 ---
     const hl = CONFIG.houseLength / 2;
     const hd = CONFIG.houseDepth / 2;
     const hh = CONFIG.houseHeight / 2;
@@ -197,111 +198,143 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 使用 LineBasicMaterial
-    // transparent: false 确保完全不透明，亮度最大化
-    // toneMapped: false 确保不被压暗
-    const houseMaterial = new THREE.LineBasicMaterial({ 
-        color: CONFIG.lineColorHouse,
-        transparent: false,
-        opacity: 1.0,
-        toneMapped: false,
-        linewidth: 1 // 注意：大多数浏览器只支持 linewidth = 1
-    });
-    
-    const doorMaterial = new THREE.LineBasicMaterial({ 
-        color: CONFIG.lineColorDoor,
-        transparent: false,
-        opacity: 1.0,
-        toneMapped: false
-    });
-
-    // 收集所有点
-    const houseGeometry = new THREE.BufferGeometry();
-    const housePositions = [];
-
-    edges.forEach(pair => {
-        housePositions.push(v[pair[0]].x, v[pair[0]].y, v[pair[0]].z);
-        housePositions.push(v[pair[1]].x, v[pair[1]].y, v[pair[1]].z);
-    });
-
-    houseGeometry.setAttribute('position', new THREE.Float32BufferAttribute(housePositions, 3));
-    const houseLine = new THREE.LineSegments(houseGeometry, houseMaterial);
-    houseLine.renderOrder = 10;
-    houseLinesGroup.add(houseLine);
-
-    // 门框
+    // 门框数据
     const groundY = c.y - hh;
     const doorTop = groundY + CONFIG.doorHeight;
     const frontZ = c.z + hd;
     const dw = CONFIG.doorWidth / 2;
-
     const dBL = new THREE.Vector3(c.x - dw, groundY, frontZ);
     const dBR = new THREE.Vector3(c.x + dw, groundY, frontZ);
     const dTL = new THREE.Vector3(c.x - dw, doorTop, frontZ);
     const dTR = new THREE.Vector3(c.x + dw, doorTop, frontZ);
+    const doorEdges = [[dBL, dTL], [dTL, dTR], [dTR, dBR]];
 
-    const doorPositions = [
-        dBL.x, dBL.y, dBL.z, dTL.x, dTL.y, dTL.z,
-        dTL.x, dTL.y, dTL.z, dTR.x, dTR.y, dTR.z,
-        dTR.x, dTR.y, dTR.z, dBR.x, dBR.y, dBR.z
-    ];
+    // --- 2. 辅助函数：创建双层霓虹线 ---
+    function createNeonLine(points, colorCore, colorGlow, thicknessCore, thicknessGlow) {
+        const positions = [];
+        for (let i = 0; i < points.length; i += 2) {
+            positions.push(points[i].x, points[i].y, points[i].z);
+            positions.push(points[i+1].x, points[i+1].y, points[i+1].z);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
-    const doorGeometry = new THREE.BufferGeometry();
-    doorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(doorPositions, 3));
-    const doorLine = new THREE.LineSegments(doorGeometry, doorMaterial);
-    doorLine.renderOrder = 10;
-    houseLinesGroup.add(doorLine);
-}
+        // A. 核心层：高亮、不透明、较细
+        const matCore = new THREE.LineBasicMaterial({
+            color: colorCore,
+            linewidth: thicknessCore, // 注意：WebGL通常只支持1，但在高分屏下看起来够粗
+            transparent: false,
+            toneMapped: false,
+            blending: THREE.NormalBlending,
+            depthWrite: false, // 防止遮挡闪烁
+            depthTest: true
+        });
+        const lineCore = new THREE.LineSegments(geometry, matCore);
+        lineCore.renderOrder = 2; // 后渲染，在最上层
 
-function createGrid() {
-    // ✅ 使用原生的 GridHelper，它内部也是 LineSegments，性能最好
+        // B. 光晕层：半透明、较粗、模拟发光
+        const matGlow = new THREE.LineBasicMaterial({
+            color: colorGlow,
+            linewidth: thicknessGlow,
+            transparent: true,
+            opacity: 0.4, // 柔和的光晕
+            toneMapped: false,
+            blending: THREE.AdditiveBlending, // 加法混合产生发光感
+            depthWrite: false,
+            depthTest: true
+        });
+        const lineGlow = new THREE.LineSegments(geometry.clone(), matGlow); // 克隆几何体以防冲突
+        lineGlow.renderOrder = 1; // 先渲染，在底层
+
+        const group = new THREE.Group();
+        group.add(lineGlow);
+        group.add(lineCore);
+        return group;
+    }
+
+    // --- 3. 生成房子 ---
+    const housePoints = [];
+    edges.forEach(pair => {
+        housePoints.push(v[pair[0]], v[pair[1]]);
+    });
+    const houseNeon = createNeonLine(housePoints, 0xffffff, CONFIG.neonHouse, 1, 3);
+    neonGroup.add(houseNeon);
+
+    // --- 4. 生成门 ---
+    const doorPoints = [];
+    doorEdges.forEach(pair => {
+        doorPoints.push(pair[0], pair[1]);
+    });
+    const doorNeon = createNeonLine(doorPoints, 0xffffff, CONFIG.neonDoor, 1, 4);
+    neonGroup.add(doorNeon);
+
+    // --- 5. 生成网格 (使用 GridHelper + 自定义光晕) ---
     const size = CONFIG.gridRadius * 2;
     const divisions = size / CONFIG.gridStep;
     
-    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.lineColorHouse, CONFIG.lineColorGrid);
-    
-    // 关键设置：让网格也遵循“不透明、无色调映射”原则
-    gridHelper.material.transparent = false;
-    gridHelper.material.opacity = 1.0;
-    gridHelper.material.toneMapped = false;
-    // 让主网格线和次网格线都亮一点，或者保持对比
-    // 这里我们简单处理，让整体都亮
-    
-    gridHelper.position.y = 0;
-    gridHelper.renderOrder = 1;
+    // 基础网格
+    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.neonGrid, CONFIG.neonGrid);
+    gridHelper.material.transparent = true;
+    gridHelper.material.opacity = 0.3;
+    gridHelper.material.depthWrite = false;
+    gridHelper.renderOrder = 0;
     scene.add(gridHelper);
+
+    // 网格主轴线光晕 (每隔几步加一条亮线，增加速度感)
+    const axisPoints = [];
+    for (let i = -divisions/2; i <= divisions/2; i++) {
+        if (i % 5 === 0) { // 每5格加一条亮线
+            const pos = i * CONFIG.gridStep;
+            axisPoints.push(new THREE.Vector3(-size/2, 0, pos), new THREE.Vector3(size/2, 0, pos));
+            axisPoints.push(new THREE.Vector3(pos, 0, -size/2), new THREE.Vector3(pos, 0, size/2));
+        }
+    }
+    if (axisPoints.length > 0) {
+        const gridGlow = createNeonLine(axisPoints, 0x444444, 0x224466, 1, 2);
+        gridGlow.renderOrder = 0;
+        scene.add(gridGlow);
+    }
 }
 
 function createCrosshair() {
     const canvas = document.createElement('canvas');
-    canvas.width = 32;
-    canvas.height = 32;
+    canvas.width = 64;
+    canvas.height = 64;
     const ctx = canvas.getContext('2d');
     
-    ctx.strokeStyle = '#ffffff'; 
-    ctx.lineWidth = 2;
-    // 移除 shadowBlur 以提高性能并保证锐利度
+    // 绘制发光准星
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#00ffff';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    
     ctx.beginPath();
-    ctx.moveTo(16, 6); ctx.lineTo(16, 26);
-    ctx.moveTo(6, 16); ctx.lineTo(26, 16);
+    ctx.moveTo(32, 12); ctx.lineTo(32, 24);
+    ctx.moveTo(32, 40); ctx.lineTo(32, 52);
+    ctx.moveTo(12, 32); ctx.lineTo(24, 32);
+    ctx.moveTo(40, 32); ctx.lineTo(52, 32);
     ctx.stroke();
+    
+    // 中心点
+    ctx.fillStyle = '#00ffff';
+    ctx.fillRect(30, 30, 4, 4);
     
     const texture = new THREE.CanvasTexture(canvas);
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.AdditiveBlending, // 准星可以用加法混合，因为它很小
+        blending: THREE.AdditiveBlending,
         depthTest: false,
         toneMapped: false
     });
     crosshair = new THREE.Sprite(material);
-    crosshair.scale.set(0.5, 0.5, 1);
+    crosshair.scale.set(0.8, 0.8, 1);
     crosshair.renderOrder = 999;
     scene.add(crosshair);
 }
 
 // ==========================================
-// 5. UI 系统 (UI System)
+// 5. UI 系统 (保持原有风格，微调配色)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
@@ -311,7 +344,7 @@ function createUI() {
     uiContainer.style.width = '100%';
     uiContainer.style.height = '100%';
     uiContainer.style.pointerEvents = 'none'; 
-    uiContainer.style.fontFamily = '"Microsoft YaHei", "Heiti SC", sans-serif';
+    uiContainer.style.fontFamily = '"Segoe UI", "Microsoft YaHei", sans-serif';
     document.body.appendChild(uiContainer);
     updateUI();
 }
@@ -322,133 +355,99 @@ function updateUI() {
     const createButton = (text, y, onClick) => {
         const btn = document.createElement('div');
         btn.innerText = text;
-        btn.style.position = 'absolute';
-        btn.style.left = '50%';
-        btn.style.transform = 'translateX(-50%)';
-        btn.style.top = y + 'px';
-        btn.style.width = '200px';
-        btn.style.height = '50px';
-        btn.style.backgroundColor = 'rgba(20, 20, 20, 0.9)';
-        btn.style.border = '2px solid #00ffff';
-        btn.style.color = '#ffffff';
-        btn.style.display = 'flex';
-        btn.style.alignItems = 'center';
-        btn.style.justifyContent = 'center';
-        btn.style.fontSize = '24px';
-        btn.style.cursor = 'pointer';
-        btn.style.pointerEvents = 'auto';
-        btn.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.6)';
-        btn.style.transition = 'all 0.3s';
-        btn.style.textShadow = '0 0 10px #00ffff';
-        btn.style.fontWeight = 'bold';
+        Object.assign(btn.style, {
+            position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: y + 'px',
+            width: '220px', height: '55px', backgroundColor: 'rgba(10, 10, 15, 0.85)',
+            border: '1px solid #00ffff', color: '#fff', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', fontSize: '22px', cursor: 'pointer', pointerEvents: 'auto',
+            boxShadow: '0 0 15px rgba(0, 255, 255, 0.4)', transition: 'all 0.2s',
+            textShadow: '0 0 8px #00ffff', fontWeight: '600', letterSpacing: '1px',
+            backdropFilter: 'blur(5px)', borderRadius: '4px'
+        });
         
         btn.onmouseenter = () => {
-            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.3)';
-            btn.style.boxShadow = '0 0 40px rgba(0, 255, 255, 1)';
-            btn.style.borderColor = '#fff';
+            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.2)';
+            btn.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.8)';
+            btn.style.transform = 'translateX(-50%) scale(1.05)';
         };
         btn.onmouseleave = () => {
-            btn.style.backgroundColor = 'rgba(20, 20, 20, 0.9)';
-            btn.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.6)';
-            btn.style.borderColor = '#00ffff';
+            btn.style.backgroundColor = 'rgba(10, 10, 15, 0.85)';
+            btn.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
+            btn.style.transform = 'translateX(-50%) scale(1)';
         };
         btn.onclick = (e) => { e.stopPropagation(); onClick(); };
         return btn;
     };
 
     if (currentState === GAME_STATE.MENU) {
-        uiContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.95)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.95)';
         uiContainer.style.pointerEvents = 'auto';
         const title = document.createElement('h1');
-        title.innerText = "霓虹引擎";
-        title.style.color = '#ffffff';
-        title.style.textAlign = 'center';
-        title.style.position = 'absolute';
-        title.style.top = '150px';
-        title.style.width = '100%';
-        title.style.fontSize = '72px';
-        title.style.margin = '0';
-        title.style.textShadow = '0 0 30px #00ffff';
-        title.style.letterSpacing = '10px';
-        title.style.fontWeight = '900';
+        title.innerText = "NEON ENGINE";
+        Object.assign(title.style, {
+            color: '#fff', textAlign: 'center', position: 'absolute', top: '120px', width: '100%',
+            fontSize: '80px', margin: '0', textShadow: '0 0 40px #00ffff, 0 0 80px #0088ff',
+            letterSpacing: '15px', fontWeight: '900', fontFamily: 'sans-serif'
+        });
         uiContainer.appendChild(title);
-        uiContainer.appendChild(createButton("开始游戏", 320, startGame));
-        uiContainer.appendChild(createButton("退出游戏", 400, () => alert("请关闭浏览器标签页")));
+        uiContainer.appendChild(createButton("START SYSTEM", 350, startGame));
+        uiContainer.appendChild(createButton("EXIT", 440, () => window.close()));
     } 
     else if (currentState === GAME_STATE.PAUSED) {
-        uiContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.6)';
         uiContainer.style.pointerEvents = 'auto';
         const title = document.createElement('h1');
-        title.innerText = "游戏暂停";
-        title.style.color = '#ffaa00';
-        title.style.textAlign = 'center';
-        title.style.position = 'absolute';
-        title.style.top = '150px';
-        title.style.width = '100%';
-        title.style.fontSize = '56px';
-        title.style.textShadow = '0 0 30px #ffaa00';
-        title.style.fontWeight = 'bold';
+        title.innerText = "SYSTEM PAUSED";
+        Object.assign(title.style, {
+            color: '#ff0055', textAlign: 'center', position: 'absolute', top: '150px', width: '100%',
+            fontSize: '60px', textShadow: '0 0 30px #ff0055', fontWeight: 'bold'
+        });
         uiContainer.appendChild(title);
-        uiContainer.appendChild(createButton("继续游戏", 260, resumeGame));
-        uiContainer.appendChild(createButton("返回主页", 340, goToMenu));
-        uiContainer.appendChild(createButton("设置", 420, () => alert("设置功能开发中...")));
+        uiContainer.appendChild(createButton("RESUME", 280, resumeGame));
+        uiContainer.appendChild(createButton("MAIN MENU", 370, goToMenu));
     }
     else if (currentState === GAME_STATE.INVENTORY) {
-        uiContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.5)';
         uiContainer.style.pointerEvents = 'auto';
         uiContainer.onclick = (e) => { if (e.target === uiContainer) toggleInventory(); };
         
         const invBox = document.createElement('div');
-        invBox.style.position = 'absolute';
-        invBox.style.left = '50%';
-        invBox.style.top = '50%';
-        invBox.style.transform = 'translate(-50%, -50%)';
-        invBox.style.width = '650px';
-        invBox.style.height = '450px';
-        invBox.style.backgroundColor = 'rgba(20, 20, 20, 0.95)';
-        invBox.style.border = '2px solid #00ffff';
-        invBox.style.boxShadow = '0 0 50px rgba(0, 255, 255, 0.5)';
-        invBox.style.display = 'flex';
-        invBox.style.flexWrap = 'wrap';
-        invBox.style.padding = '25px';
-        invBox.style.boxSizing = 'border-box';
-        invBox.style.borderRadius = '10px';
+        Object.assign(invBox.style, {
+            position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+            width: '700px', minHeight: '400px', backgroundColor: 'rgba(10, 10, 15, 0.95)',
+            border: '1px solid #00ffff', boxShadow: '0 0 60px rgba(0, 255, 255, 0.3)',
+            display: 'flex', flexWrap: 'wrap', padding: '30px', boxSizing: 'border-box',
+            borderRadius: '8px', backdropFilter: 'blur(10px)'
+        });
         invBox.onclick = (e) => e.stopPropagation(); 
         
         const title = document.createElement('div');
-        title.innerText = "背包 (按 1-9 快速切换)";
-        title.style.width = '100%';
-        title.style.color = '#ffffff';
-        title.style.fontSize = '28px';
-        title.style.marginBottom = '25px';
-        title.style.textAlign = 'center';
-        title.style.textShadow = '0 0 15px #00ffff';
-        title.style.fontWeight = 'bold';
+        title.innerText = "INVENTORY MODULE";
+        Object.assign(title.style, {
+            width: '100%', color: '#fff', fontSize: '24px', marginBottom: '20px',
+            textAlign: 'center', textShadow: '0 0 10px #00ffff', fontWeight: 'bold', letterSpacing: '2px'
+        });
         invBox.appendChild(title);
 
         inventory.forEach((item, index) => {
             const slot = document.createElement('div');
-            slot.style.width = '80px';
-            slot.style.height = '80px';
-            slot.style.margin = '12px';
-            slot.style.backgroundColor = index === selectedSlotIndex ? 'rgba(0, 255, 255, 0.25)' : 'rgba(60, 60, 70, 0.6)';
-            slot.style.border = index === selectedSlotIndex ? '2px solid #00ffff' : '1px solid #555';
-            slot.style.boxShadow = index === selectedSlotIndex ? '0 0 25px rgba(0,255,255,0.6)' : 'none';
-            slot.style.display = 'flex';
-            slot.style.flexDirection = 'column';
-            slot.style.alignItems = 'center';
-            slot.style.justifyContent = 'center';
-            slot.style.borderRadius = '8px';
+            const isSelected = index === selectedSlotIndex;
             const hexColor = item.color.toString(16).padStart(6, '0');
-            slot.style.color = '#' + hexColor;
-            slot.style.fontSize = '15px';
-            slot.style.textAlign = 'center';
-            slot.style.cursor = 'pointer';
-            slot.style.transition = 'all 0.2s';
-            slot.style.fontWeight = index === selectedSlotIndex ? 'bold' : 'normal';
-            slot.innerHTML = `<span style="font-size:16px">${item.name}</span><span style="font-size:12px;color:#aaa;margin-top:4px">[${index + 1}]</span>`;
-            slot.onmouseenter = () => { if(index !== selectedSlotIndex) { slot.style.borderColor = '#aaa'; slot.style.backgroundColor = 'rgba(80, 80, 90, 0.8)'; slot.style.transform = 'scale(1.05)'; } };
-            slot.onmouseleave = () => { if(index !== selectedSlotIndex) { slot.style.borderColor = '#555'; slot.style.backgroundColor = 'rgba(60, 60, 70, 0.6)'; slot.style.transform = 'scale(1)'; } };
+            
+            Object.assign(slot.style, {
+                width: '90px', height: '90px', margin: '10px',
+                backgroundColor: isSelected ? 'rgba(0, 255, 255, 0.15)' : 'rgba(40, 40, 50, 0.5)',
+                border: isSelected ? '2px solid #00ffff' : '1px solid #444',
+                boxShadow: isSelected ? '0 0 20px rgba(0,255,255,0.5)' : 'none',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                borderRadius: '6px', color: '#' + hexColor, fontSize: '14px', textAlign: 'center',
+                cursor: 'pointer', transition: 'all 0.2s', fontWeight: isSelected ? 'bold' : 'normal'
+            });
+            
+            slot.innerHTML = `<div style="font-size:20px; margin-bottom:5px">■</div><div>${item.name}</div><div style="font-size:10px;color:#666;margin-top:2px">[${index + 1}]</div>`;
+            
+            slot.onmouseenter = () => { if(!isSelected) { slot.style.borderColor = '#888'; slot.style.transform = 'scale(1.05)'; } };
+            slot.onmouseleave = () => { if(!isSelected) { slot.style.borderColor = '#444'; slot.style.transform = 'scale(1)'; } };
             slot.onclick = (e) => { e.stopPropagation(); selectedSlotIndex = index; updateUI(); };
             invBox.appendChild(slot);
         });
@@ -456,37 +455,29 @@ function updateUI() {
         
         const hint = document.createElement('div');
         const hintColor = inventory[selectedSlotIndex].color.toString(16).padStart(6, '0');
-        hint.innerText = `当前装备：${inventory[selectedSlotIndex].name}`;
-        hint.style.position = 'absolute';
-        hint.style.bottom = '30px';
-        hint.style.left = '30px';
-        hint.style.color = '#' + hintColor;
-        hint.style.fontSize = '22px';
-        hint.style.fontWeight = 'bold';
-        hint.style.backgroundColor = 'rgba(0,0,0,0.7)';
-        hint.style.padding = '8px 15px';
-        hint.style.border = `1px solid #${hintColor}`;
-        hint.style.borderRadius = '5px';
-        hint.style.boxShadow = `0 0 15px rgba(${parseInt(hintColor.substring(0,2),16)}, ${parseInt(hintColor.substring(2,4),16)}, ${parseInt(hintColor.substring(4,6),16)}, 0.6)`;
-        hint.style.pointerEvents = 'none';
+        hint.innerText = `EQUIPPED: ${inventory[selectedSlotIndex].name}`;
+        Object.assign(hint.style, {
+            position: 'absolute', bottom: '40px', left: '40px', color: '#' + hintColor,
+            fontSize: '20px', fontWeight: 'bold', backgroundColor: 'rgba(0,0,0,0.8)',
+            padding: '10px 20px', border: `1px solid #${hintColor}`, borderRadius: '4px',
+            boxShadow: `0 0 15px rgba(${parseInt(hintColor.substring(0,2),16)}, ${parseInt(hintColor.substring(2,4),16)}, ${parseInt(hintColor.substring(4,6),16)}, 0.5)`,
+            pointerEvents: 'none', letterSpacing: '1px'
+        });
         uiContainer.appendChild(hint);
     }
     
     if (currentState === GAME_STATE.PLAYING || currentState === GAME_STATE.INVENTORY) {
         const info = document.createElement('div');
-        info.style.position = 'absolute';
-        info.style.top = '15px';
-        info.style.left = '15px';
-        info.style.color = 'rgba(255, 255, 255, 1)';
-        info.style.fontSize = '16px';
-        info.style.fontFamily = '"Microsoft YaHei", monospace';
-        info.style.textShadow = '0 0 5px black';
-        info.style.pointerEvents = 'none';
-        info.style.lineHeight = '1.6';
+        Object.assign(info.style, {
+            position: 'absolute', top: '20px', left: '20px', color: 'rgba(200, 200, 200, 0.9)',
+            fontSize: '14px', fontFamily: 'monospace', textShadow: '0 0 4px black',
+            pointerEvents: 'none', lineHeight: '1.8', backgroundColor: 'rgba(0,0,0,0.4)',
+            padding: '10px 15px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)'
+        });
         info.innerHTML = `
-            <span style="color:#00ffff; font-weight:bold;">坐标:</span> ${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}<br>
-            <span style="color:#aaa;">[WASD]</span> 移动 &nbsp; <span style="color:#aaa;">[Shift]</span> 奔跑 &nbsp; <span style="color:#aaa;">[Ctrl]</span> 蹲下 &nbsp; <span style="color:#aaa;">[Space]</span> 跳跃<br>
-            <span style="color:#aaa;">[E]</span> 背包 &nbsp; <span style="color:#aaa;">[1-9]</span> 切换物品 &nbsp; <span style="color:#aaa;">[Esc]</span> 菜单
+            <span style="color:#00ffff; font-weight:bold;">POS:</span> ${camera.position.x.toFixed(0)} : ${camera.position.y.toFixed(0)} : ${camera.position.z.toFixed(0)}<br>
+            <span style="color:#666;">WASD</span> Move &nbsp; <span style="color:#666;">SHIFT</span> Sprint &nbsp; <span style="color:#666;">CTRL</span> Crouch &nbsp; <span style="color:#666;">SPACE</span> Jump<br>
+            <span style="color:#666;">E</span> Inventory &nbsp; <span style="color:#666;">ESC</span> Menu
         `;
         uiContainer.appendChild(info);
     }
@@ -523,7 +514,7 @@ function toggleInventory() {
 }
 
 // ==========================================
-// 6. 输入处理 (Input Handling)
+// 6. 输入处理
 // ==========================================
 function onKeyDown(event) {
     switch (event.code) {
@@ -533,7 +524,7 @@ function onKeyDown(event) {
         case 'ArrowRight': case 'KeyD': moveRight = true; break;
         case 'Space': 
             if (player.isGrounded && currentState === GAME_STATE.PLAYING && !isCrouching) {
-                player.velocity.y = CONFIG.jumpForce;
+                currentVelocity.y = CONFIG.jumpForce;
                 player.isGrounded = false;
             }
             break;
@@ -542,7 +533,7 @@ function onKeyDown(event) {
             if (!isCrouching) {
                 isCrouching = true;
                 if(camera) camera.position.y = Math.max(camera.position.y, CONFIG.groundY + CONFIG.playerHeightCrouch);
-                player.velocity.y = 0;
+                currentVelocity.y = 0;
             }
             break;
         case 'KeyE':
@@ -605,7 +596,7 @@ function onWindowResize() {
 }
 
 // ==========================================
-// 7. 物理与碰撞 (Physics & Collision)
+// 7. 物理与运动 (优化手感)
 // ==========================================
 function checkHouseCollision(pos) {
     const hl = CONFIG.houseLength / 2;
@@ -615,75 +606,110 @@ function checkHouseCollision(pos) {
     const minX = c.x - hl, maxX = c.x + hl;
     const minZ = c.z - hd, maxZ = c.z + hd;
     const minY = c.y - hh, maxY = c.y + hh;
+    
+    // 简单的 AABB 碰撞
     if (pos.y < minY - 5 || pos.y - CONFIG.playerHeightStand > maxY + 5) return false;
     if (pos.x < minX - CONFIG.playerRadius || pos.x > maxX + CONFIG.playerRadius ||
         pos.z < minZ - CONFIG.playerRadius || pos.z > maxZ + CONFIG.playerRadius) return false;
+    
+    // 门洞检测
     const dw = CONFIG.doorWidth / 2;
-    const left = c.x - dw, right = c.x + dw;
-    const inX = pos.x > left - CONFIG.playerRadius && pos.x < right + CONFIG.playerRadius;
-    const inZ = pos.z > maxZ - 2.0 && pos.z < maxZ + 2.0;
+    const inX = pos.x > (c.x - dw) - CONFIG.playerRadius && pos.x < (c.x + dw) + CONFIG.playerRadius;
+    const inZ = pos.z > (c.z + hd) - 2.0 && pos.z < (c.z + hd) + 2.0;
     if (inX && inZ) return false;
-    const onSide = (pos.x <= minX + CONFIG.playerRadius || pos.x >= maxX - CONFIG.playerRadius);
-    const onFrontBack = (pos.z <= minZ + CONFIG.playerRadius || pos.z >= maxZ - CONFIG.playerRadius);
-    if (onSide && pos.z >= minZ - CONFIG.playerRadius && pos.z <= maxZ + CONFIG.playerRadius) return true;
-    if (onFrontBack && pos.x >= minX - CONFIG.playerRadius && pos.x <= maxX + CONFIG.playerRadius) return true;
-    return false;
+    
+    return true;
 }
 
 function updatePhysics(delta) {
     if (currentState !== GAME_STATE.PLAYING) return;
-    const targetHeight = isCrouching ? CONFIG.playerHeightCrouch : CONFIG.playerHeightStand;
-    if (isCrouching) {
-        camera.position.y = Math.max(camera.position.y, CONFIG.groundY + targetHeight);
-    } else {
-        if (player.isGrounded) camera.position.y = CONFIG.groundY + targetHeight;
-    }
+
+    // 1. 计算目标速度
     const speed = isCrouching ? CONFIG.crouchSpeed : (isSprinting ? CONFIG.sprintSpeed : CONFIG.walkSpeed);
     const forward = new THREE.Vector3();
     camera.getWorldDirection(forward);
     forward.y = 0; forward.normalize();
     const right = new THREE.Vector3();
     right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
-    const moveVector = new THREE.Vector3(0, 0, 0);
-    if (moveForward) moveVector.add(forward);
-    if (moveBackward) moveVector.sub(forward);
-    if (moveRight) moveVector.add(right);
-    if (moveLeft) moveVector.sub(right);
-    if (moveVector.lengthSq() > 0) {
-        moveVector.normalize().multiplyScalar(speed * delta);
-        let nextX = camera.position.x + moveVector.x;
-        if (!checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) camera.position.x += moveVector.x;
-        let nextZ = camera.position.z + moveVector.z;
-        if (!checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) camera.position.z += moveVector.z;
+    
+    targetVelocity.set(0, 0, 0);
+    if (moveForward) targetVelocity.add(forward);
+    if (moveBackward) targetVelocity.sub(forward);
+    if (moveRight) targetVelocity.add(right);
+    if (moveLeft) targetVelocity.sub(right);
+    
+    if (targetVelocity.lengthSq() > 0) {
+        targetVelocity.normalize().multiplyScalar(speed);
     }
-    player.velocity.y -= CONFIG.gravity * delta;
-    camera.position.y += player.velocity.y * delta;
+
+    // 2. 平滑插值 (Lerp) - 消除顿挫感
+    currentVelocity.x += (targetVelocity.x - currentVelocity.x) * CONFIG.smoothFactor;
+    currentVelocity.z += (targetVelocity.z - currentVelocity.z) * CONFIG.smoothFactor;
+
+    // 3. 应用移动并检测碰撞
+    const moveStep = delta;
+    let nextX = camera.position.x + currentVelocity.x * moveStep;
+    let nextZ = camera.position.z + currentVelocity.z * moveStep;
+    
+    // X轴碰撞
+    if (!checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) {
+        currentVelocity.x = 0; // 撞墙停止
+    } else {
+        camera.position.x = nextX;
+    }
+    
+    // Z轴碰撞
+    if (!checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) {
+        currentVelocity.z = 0;
+    } else {
+        camera.position.z = nextZ;
+    }
+
+    // 4. 重力与跳跃
+    currentVelocity.y -= CONFIG.gravity * delta;
+    camera.position.y += currentVelocity.y * delta;
+    
+    const targetHeight = isCrouching ? CONFIG.playerHeightCrouch : CONFIG.playerHeightStand;
     const groundLevel = CONFIG.groundY + targetHeight;
+    
     if (camera.position.y <= groundLevel) {
         camera.position.y = groundLevel;
-        player.velocity.y = 0;
+        currentVelocity.y = 0;
         player.isGrounded = true;
     } else {
         player.isGrounded = false;
+    }
+    
+    // 蹲下高度修正
+    if (isCrouching && player.isGrounded) {
+        camera.position.y = Math.max(camera.position.y, groundLevel);
     }
 }
 
 function updateGrid() {
     if (gridHelper && camera) {
-        gridHelper.position.x = Math.floor(camera.position.x / CONFIG.gridStep) * CONFIG.gridStep;
-        gridHelper.position.z = Math.floor(camera.position.z / CONFIG.gridStep) * CONFIG.gridStep;
+        // 网格跟随玩家，制造无限地面的错觉
+        const step = CONFIG.gridStep;
+        gridHelper.position.x = Math.floor(camera.position.x / step) * step;
+        gridHelper.position.z = Math.floor(camera.position.z / step) * step;
     }
+    // 霓虹组也跟随？不，房子是固定的。如果需要无限世界，这里要特殊处理。
+    // 当前设计：房子固定，网格移动。
 }
 
 function animate() {
     requestAnimationFrame(animate);
     const time = performance.now();
-    const delta = (time - prevTime) / 1000;
+    const delta = Math.min((time - prevTime) / 1000, 0.1); // 限制最大delta防止卡顿时飞出
     prevTime = time;
+    
     if (currentState === GAME_STATE.PLAYING) {
         updatePhysics(delta);
         updateCameraRotation();
     }
     updateGrid();
-    if (renderer && scene && camera) renderer.render(scene, camera);
+    
+    if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+    }
 }
