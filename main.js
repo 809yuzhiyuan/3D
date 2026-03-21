@@ -36,19 +36,17 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉优化配置 (极致亮度版)
-    bgColor: 0x101018,       // 稍微加深背景，以衬托更亮的线条
-    fogColor: 0x101018,
-    fogDensity: 0.0012,      // 雾淡一点，让远处线条也能看见
+    // ✅ 视觉配置：极致可见度
+    bgColor: 0x050505,       // 纯黑背景，对比度最大
+    fogColor: 0x050505,
+    fogDensity: 0.0008,      // 雾非常淡，保证远处可见
     
-    // 🔥 高亮颜色配置
-    lineColorHouse: 0x00ffff, // 纯青色 (Cyan)
-    lineColorDoor: 0xffaa00,  // 亮橙色
-    lineOpacity: 1.0,        // 完全不透明
+    // 🔥 极高亮颜色 (使用接近白色的浅色，靠色调映射压出颜色)
+    lineColorHouse: 0xaaffff, // 极浅青色 (几乎白)
+    lineColorDoor: 0xffddaa,  // 极浅橙色 (几乎白)
     
-    // 🔥 网格颜色调亮
-    gridColorMajor: 0x888888, 
-    gridColorMinor: 0x555555
+    gridColorMajor: 0x444444, 
+    gridColorMinor: 0x222222
 };
 
 // ==========================================
@@ -115,9 +113,9 @@ function init() {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 关键：使用 ACES 电影级色调映射，并大幅提高曝光度
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.6; // 之前是 1.2，现在调到 1.6，让亮部更亮
+    // ✅ 关键：极高的曝光度，让浅色线条变成发光体
+    renderer.toneMapping = THREE.ReinhardToneMapping;
+    renderer.toneMappingExposure = 2.5; // 之前是 1.6，现在拉到 2.5，极度明亮
     document.body.appendChild(renderer.domElement);
 
     createHouseLines();
@@ -163,10 +161,12 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - 🔥 亮度核心修改
+// 4. 场景构建 (Scene Building) - ✅ 修复不可见问题
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
+    // ✅ 确保线条组在网格之后添加，或者设置 renderOrder
+    houseLinesGroup.renderOrder = 10; 
     scene.add(houseLinesGroup);
 
     const hl = CONFIG.houseLength / 2;
@@ -191,30 +191,31 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 核心修改：使用 AdditiveBlending (加法混合)
-    // 这会让线条颜色直接叠加到背景上，产生强烈的发光效果
+    // ✅ 方案变更：使用标准混合，但颜色极浅，靠高曝光提亮
+    // 这样线条绝对不会被背景吃掉
     const lineMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorHouse, 
         transparent: false,
-        opacity: CONFIG.lineOpacity,
-        blending: THREE.AdditiveBlending, // 🔥 发光关键
-        depthWrite: false,                // 防止线条互相遮挡变暗
-        linewidth: 1 
+        linewidth: 2, // 尝试加粗 (取决于浏览器支持)
+        blending: THREE.NormalBlending,
+        depthTest: true,
+        depthWrite: true
     });
     
     const doorMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorDoor, 
         transparent: false, 
-        opacity: 1.0,
-        blending: THREE.AdditiveBlending, // 🔥 发光关键
-        depthWrite: false,
-        linewidth: 1 
+        linewidth: 2,
+        blending: THREE.NormalBlending,
+        depthTest: true,
+        depthWrite: true
     });
 
     edges.forEach(pair => {
         const points = [v[pair[0]], v[pair[1]]];
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         const line = new THREE.Line(geometry, lineMaterial);
+        line.renderOrder = 10; // 强制最后渲染
         houseLinesGroup.add(line);
     });
 
@@ -233,6 +234,7 @@ function createHouseLines() {
     doorEdges.forEach(pair => {
         const geometry = new THREE.BufferGeometry().setFromPoints(pair);
         const line = new THREE.Line(geometry, doorMaterial);
+        line.renderOrder = 10;
         houseLinesGroup.add(line);
     });
 }
@@ -244,10 +246,8 @@ function createGrid() {
     gridHelper = new THREE.GridHelper(size, divisions, CONFIG.gridColorMajor, CONFIG.gridColorMinor);
     gridHelper.position.y = 0;
     gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.5;
-    // 网格也使用加法混合，让它看起来像投射在地上的光网
-    gridHelper.material.blending = THREE.AdditiveBlending; 
-    gridHelper.material.depthWrite = false;
+    gridHelper.material.opacity = 0.4;
+    gridHelper.renderOrder = 1; // 网格先渲染
     scene.add(gridHelper);
 }
 
@@ -257,11 +257,11 @@ function createCrosshair() {
     canvas.height = 32;
     const ctx = canvas.getContext('2d');
     
-    // 准星纯白，带强烈光晕
+    // 纯白准星
     ctx.strokeStyle = '#ffffff'; 
     ctx.lineWidth = 3;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 5;
+    ctx.shadowColor = '#ffffff';
     
     ctx.beginPath();
     ctx.moveTo(16, 6); ctx.lineTo(16, 26);
@@ -272,11 +272,12 @@ function createCrosshair() {
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.AdditiveBlending, // 🔥 准星也发光
+        blending: THREE.AdditiveBlending, // 准星可以用加法混合，因为它在最前
         depthTest: false
     });
     crosshair = new THREE.Sprite(material);
-    crosshair.scale.set(0.6, 0.6, 1);
+    crosshair.scale.set(0.8, 0.8, 1);
+    crosshair.renderOrder = 999; // 最顶层
     scene.add(crosshair);
 }
 
@@ -308,31 +309,29 @@ function updateUI() {
         btn.style.top = y + 'px';
         btn.style.width = '200px';
         btn.style.height = '50px';
-        btn.style.backgroundColor = 'rgba(30, 30, 40, 0.9)';
-        btn.style.border = '1px solid #00ffff';
-        btn.style.color = '#00ffff';
+        btn.style.backgroundColor = 'rgba(20, 20, 20, 0.9)';
+        btn.style.border = '2px solid #00ffff';
+        btn.style.color = '#ffffff';
         btn.style.display = 'flex';
         btn.style.alignItems = 'center';
         btn.style.justifyContent = 'center';
         btn.style.fontSize = '24px';
         btn.style.cursor = 'pointer';
         btn.style.pointerEvents = 'auto';
-        btn.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
+        btn.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.6)';
         btn.style.transition = 'all 0.3s';
-        btn.style.textShadow = '0 0 8px rgba(0,255,255,1)';
+        btn.style.textShadow = '0 0 10px #00ffff';
         btn.style.fontWeight = 'bold';
         
         btn.onmouseenter = () => {
-            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.25)';
-            btn.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.9)';
-            btn.style.color = '#ffffff';
-            btn.style.textShadow = '0 0 15px #fff';
+            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.3)';
+            btn.style.boxShadow = '0 0 40px rgba(0, 255, 255, 1)';
+            btn.style.borderColor = '#fff';
         };
         btn.onmouseleave = () => {
-            btn.style.backgroundColor = 'rgba(30, 30, 40, 0.9)';
-            btn.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
-            btn.style.color = '#00ffff';
-            btn.style.textShadow = '0 0 8px rgba(0,255,255,1)';
+            btn.style.backgroundColor = 'rgba(20, 20, 20, 0.9)';
+            btn.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.6)';
+            btn.style.borderColor = '#00ffff';
         };
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -342,19 +341,19 @@ function updateUI() {
     };
 
     if (currentState === GAME_STATE.MENU) {
-        uiContainer.style.backgroundColor = 'rgba(16, 16, 24, 0.95)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.95)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
         title.innerText = "霓虹引擎";
-        title.style.color = '#00ffff';
+        title.style.color = '#ffffff';
         title.style.textAlign = 'center';
         title.style.position = 'absolute';
         title.style.top = '150px';
         title.style.width = '100%';
         title.style.fontSize = '72px';
         title.style.margin = '0';
-        title.style.textShadow = '0 0 40px #00ffff, 0 0 80px #00aaaa';
+        title.style.textShadow = '0 0 30px #00ffff, 0 0 60px #00aaaa';
         title.style.letterSpacing = '10px';
         title.style.fontWeight = '900';
         uiContainer.appendChild(title);
@@ -363,7 +362,7 @@ function updateUI() {
         uiContainer.appendChild(createButton("退出游戏", 400, () => alert("请关闭浏览器标签页")));
     } 
     else if (currentState === GAME_STATE.PAUSED) {
-        uiContainer.style.backgroundColor = 'rgba(16, 16, 24, 0.7)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.7)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
@@ -383,7 +382,7 @@ function updateUI() {
         uiContainer.appendChild(createButton("设置", 420, () => alert("设置功能开发中...")));
     }
     else if (currentState === GAME_STATE.INVENTORY) {
-        uiContainer.style.backgroundColor = 'rgba(16, 16, 24, 0.6)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.6)';
         uiContainer.style.pointerEvents = 'auto';
 
         uiContainer.onclick = (e) => {
@@ -397,7 +396,7 @@ function updateUI() {
         invBox.style.transform = 'translate(-50%, -50%)';
         invBox.style.width = '650px';
         invBox.style.height = '450px';
-        invBox.style.backgroundColor = 'rgba(20, 20, 30, 0.95)';
+        invBox.style.backgroundColor = 'rgba(20, 20, 20, 0.95)';
         invBox.style.border = '2px solid #00ffff';
         invBox.style.boxShadow = '0 0 50px rgba(0, 255, 255, 0.5)';
         invBox.style.display = 'flex';
@@ -410,7 +409,7 @@ function updateUI() {
         const title = document.createElement('div');
         title.innerText = "背包 (按 1-9 快速切换)";
         title.style.width = '100%';
-        title.style.color = '#00ffff';
+        title.style.color = '#ffffff';
         title.style.fontSize = '28px';
         title.style.marginBottom = '25px';
         title.style.textAlign = 'center';
@@ -490,7 +489,7 @@ function updateUI() {
         info.style.position = 'absolute';
         info.style.top = '15px';
         info.style.left = '15px';
-        info.style.color = 'rgba(255, 255, 255, 0.95)';
+        info.style.color = 'rgba(255, 255, 255, 1)';
         info.style.fontSize = '16px';
         info.style.fontFamily = '"Microsoft YaHei", monospace';
         info.style.textShadow = '0 0 5px black';
