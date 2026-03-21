@@ -36,18 +36,21 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉优化配置 (原生兼容版)
-    lineColorHouse: 0x00ffff, // 青色
-    lineColorDoor: 0xffaa00,  // 橙色
-    bgColor: 0x050508,        // 深空灰黑
-    fogColor: 0x050508
+    // ✅ 视觉优化配置 (更明亮)
+    bgColor: 0x1a1a24,       // 深灰蓝色，比纯黑亮
+    fogColor: 0x1a1a24,
+    fogDensity: 0.0015,      // 雾气稍淡，视野更清晰
+    lineColorHouse: 0x00ffff, // 亮青色
+    lineColorDoor: 0xffaa00,  // 亮橙色
+    lineOpacity: 1.0,        // 完全不透明，最亮
+    gridColorMajor: 0x666666, // 亮灰色网格
+    gridColorMinor: 0x444444
 };
 
 // ==========================================
 // 2. 全局变量 (Global State)
 // ==========================================
 let camera, scene, renderer;
-// 移除了 composer，不再依赖后处理模块
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let isSprinting = false;
 let isCrouching = false;
@@ -69,6 +72,7 @@ const GAME_STATE = {
 let currentState = GAME_STATE.MENU;
 let isMouseCaptured = false;
 
+// ✅ 物品列表汉化
 const inventory = [
     { name: "铁剑", color: 0xC0C0C0 },
     { name: "治疗药水", color: 0xFF0000 },
@@ -99,8 +103,8 @@ function init() {
     // 1. 创建场景
     scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.bgColor);
-    // 增加雾效浓度，营造深邃感，掩盖远处的线条截断
-    scene.fog = new THREE.FogExp2(CONFIG.fogColor, 0.0025); 
+    // 设置雾气，让远处平滑过渡，不再是一片死黑
+    scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity); 
 
     // 2. 创建相机
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
@@ -108,11 +112,12 @@ function init() {
     resetPlayer();
 
     // 3. 创建渲染器
-    renderer = new THREE.WebGLRenderer({ antialias: true }); // 开启原生抗锯齿
+    renderer = new THREE.WebGLRenderer({ antialias: true }); 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
-    // 开启色调映射，让亮色更自然
-    renderer.toneMapping = THREE.ReinhardToneMapping;
+    // 调整色调映射，让亮色更通透
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2; // 增加曝光度，让画面更亮
     document.body.appendChild(renderer.domElement);
 
     // 4. 创建场景物体
@@ -159,7 +164,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 原生发光技巧
+// 4. 场景构建 (Scene Building) - ✅ 亮度优化
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -187,21 +192,19 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 技巧：使用 AdditiveBlending (加法混合) 让线条在重叠处变亮，模拟发光
+    // ✅ 使用正常混合模式，不透明，颜色鲜艳
     const lineMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorHouse, 
-        transparent: true, 
-        opacity: 0.9,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false // 防止线条互相遮挡导致的闪烁
+        transparent: false,
+        opacity: CONFIG.lineOpacity,
+        linewidth: 1 
     });
     
     const doorMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorDoor, 
-        transparent: true, 
+        transparent: false, 
         opacity: 1.0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
+        linewidth: 1 
     });
 
     edges.forEach(pair => {
@@ -234,11 +237,11 @@ function createGrid() {
     const size = CONFIG.gridRadius * 2;
     const divisions = CONFIG.gridRadius * 2 / CONFIG.gridStep;
     
-    gridHelper = new THREE.GridHelper(size, divisions, 0x444444, 0x222222);
+    // ✅ 使用更亮的网格颜色
+    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.gridColorMajor, CONFIG.gridColorMinor);
     gridHelper.position.y = 0;
     gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.4;
-    gridHelper.material.blending = THREE.AdditiveBlending;
+    gridHelper.material.opacity = 0.6; // 网格稍微明显一点
     scene.add(gridHelper);
 }
 
@@ -248,10 +251,9 @@ function createCrosshair() {
     canvas.height = 32;
     const ctx = canvas.getContext('2d');
     
-    // 绘制发光准星
-    ctx.strokeStyle = '#00ffff'; 
+    // 准星改为白色带青色光晕，更清晰
+    ctx.strokeStyle = '#ffffff'; 
     ctx.lineWidth = 2;
-    // Canvas 阴影模拟发光
     ctx.shadowBlur = 4;
     ctx.shadowColor = '#00ffff';
     
@@ -264,8 +266,8 @@ function createCrosshair() {
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthTest: false // 准星始终在最前
+        blending: THREE.NormalBlending,
+        depthTest: false
     });
     crosshair = new THREE.Sprite(material);
     crosshair.scale.set(0.5, 0.5, 1);
@@ -273,7 +275,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 5. UI 系统 (UI System)
+// 5. UI 系统 (UI System) - ✅ 全中文
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
@@ -283,7 +285,7 @@ function createUI() {
     uiContainer.style.width = '100%';
     uiContainer.style.height = '100%';
     uiContainer.style.pointerEvents = 'none'; 
-    uiContainer.style.fontFamily = '"Microsoft YaHei", Arial, sans-serif';
+    uiContainer.style.fontFamily = '"Microsoft YaHei", "Heiti SC", sans-serif';
     document.body.appendChild(uiContainer);
     updateUI();
 }
@@ -300,7 +302,7 @@ function updateUI() {
         btn.style.top = y + 'px';
         btn.style.width = '200px';
         btn.style.height = '50px';
-        btn.style.backgroundColor = 'rgba(10, 10, 15, 0.8)';
+        btn.style.backgroundColor = 'rgba(30, 30, 40, 0.9)';
         btn.style.border = '1px solid #00ffff';
         btn.style.color = '#00ffff';
         btn.style.display = 'flex';
@@ -309,17 +311,20 @@ function updateUI() {
         btn.style.fontSize = '24px';
         btn.style.cursor = 'pointer';
         btn.style.pointerEvents = 'auto';
-        btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.2)';
+        btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.3)';
         btn.style.transition = 'all 0.3s';
-        btn.style.textShadow = '0 0 5px rgba(0,255,255,0.5)';
+        btn.style.textShadow = '0 0 5px rgba(0,255,255,0.8)';
+        btn.style.fontWeight = 'bold';
         
         btn.onmouseenter = () => {
-            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.15)';
-            btn.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.6)';
+            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.2)';
+            btn.style.boxShadow = '0 0 25px rgba(0, 255, 255, 0.8)';
+            btn.style.color = '#ffffff';
         };
         btn.onmouseleave = () => {
-            btn.style.backgroundColor = 'rgba(10, 10, 15, 0.8)';
-            btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.2)';
+            btn.style.backgroundColor = 'rgba(30, 30, 40, 0.9)';
+            btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.3)';
+            btn.style.color = '#00ffff';
         };
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -329,45 +334,48 @@ function updateUI() {
     };
 
     if (currentState === GAME_STATE.MENU) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 8, 0.9)';
+        uiContainer.style.backgroundColor = 'rgba(26, 26, 36, 0.95)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
-        title.innerText = "NEON ENGINE";
+        title.innerText = "霓虹引擎";
         title.style.color = '#00ffff';
         title.style.textAlign = 'center';
         title.style.position = 'absolute';
         title.style.top = '150px';
         title.style.width = '100%';
-        title.style.fontSize = '64px';
+        title.style.fontSize = '72px';
         title.style.margin = '0';
-        title.style.textShadow = '0 0 20px #00ffff';
-        title.style.letterSpacing = '5px';
+        title.style.textShadow = '0 0 30px #00ffff, 0 0 60px #00aaaa';
+        title.style.letterSpacing = '10px';
+        title.style.fontWeight = '900';
         uiContainer.appendChild(title);
 
-        uiContainer.appendChild(createButton("START GAME", 300, startGame));
-        uiContainer.appendChild(createButton("EXIT", 370, () => alert("Close Tab")));
+        uiContainer.appendChild(createButton("开始游戏", 320, startGame));
+        uiContainer.appendChild(createButton("退出游戏", 400, () => alert("请关闭浏览器标签页")));
     } 
     else if (currentState === GAME_STATE.PAUSED) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 8, 0.6)';
+        uiContainer.style.backgroundColor = 'rgba(26, 26, 36, 0.7)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
-        title.innerText = "PAUSED";
+        title.innerText = "游戏暂停";
         title.style.color = '#ffaa00';
         title.style.textAlign = 'center';
         title.style.position = 'absolute';
         title.style.top = '150px';
         title.style.width = '100%';
-        title.style.fontSize = '48px';
-        title.style.textShadow = '0 0 15px #ffaa00';
+        title.style.fontSize = '56px';
+        title.style.textShadow = '0 0 20px #ffaa00';
+        title.style.fontWeight = 'bold';
         uiContainer.appendChild(title);
 
-        uiContainer.appendChild(createButton("RESUME", 250, resumeGame));
-        uiContainer.appendChild(createButton("MENU", 320, goToMenu));
+        uiContainer.appendChild(createButton("继续游戏", 260, resumeGame));
+        uiContainer.appendChild(createButton("返回主页", 340, goToMenu));
+        uiContainer.appendChild(createButton("设置", 420, () => alert("设置功能开发中...")));
     }
     else if (currentState === GAME_STATE.INVENTORY) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 8, 0.4)';
+        uiContainer.style.backgroundColor = 'rgba(26, 26, 36, 0.6)';
         uiContainer.style.pointerEvents = 'auto';
 
         uiContainer.onclick = (e) => {
@@ -379,58 +387,65 @@ function updateUI() {
         invBox.style.left = '50%';
         invBox.style.top = '50%';
         invBox.style.transform = 'translate(-50%, -50%)';
-        invBox.style.width = '600px';
-        invBox.style.height = '400px';
-        invBox.style.backgroundColor = 'rgba(10, 10, 15, 0.95)';
+        invBox.style.width = '650px';
+        invBox.style.height = '450px';
+        invBox.style.backgroundColor = 'rgba(20, 20, 30, 0.95)';
         invBox.style.border = '2px solid #00ffff';
-        invBox.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.3)';
+        invBox.style.boxShadow = '0 0 40px rgba(0, 255, 255, 0.4)';
         invBox.style.display = 'flex';
         invBox.style.flexWrap = 'wrap';
-        invBox.style.padding = '20px';
+        invBox.style.padding = '25px';
         invBox.style.boxSizing = 'border-box';
+        invBox.style.borderRadius = '10px';
         invBox.onclick = (e) => e.stopPropagation(); 
         
         const title = document.createElement('div');
-        title.innerText = "INVENTORY";
+        title.innerText = "背包 (按 1-9 快速切换)";
         title.style.width = '100%';
         title.style.color = '#00ffff';
-        title.style.fontSize = '24px';
-        title.style.marginBottom = '20px';
+        title.style.fontSize = '28px';
+        title.style.marginBottom = '25px';
         title.style.textAlign = 'center';
         title.style.textShadow = '0 0 10px #00ffff';
+        title.style.fontWeight = 'bold';
         invBox.appendChild(title);
 
         inventory.forEach((item, index) => {
             const slot = document.createElement('div');
-            slot.style.width = '70px';
-            slot.style.height = '70px';
-            slot.style.margin = '10px';
-            slot.style.backgroundColor = index === selectedSlotIndex ? 'rgba(0, 255, 255, 0.2)' : 'rgba(50, 50, 50, 0.5)';
-            slot.style.border = index === selectedSlotIndex ? '2px solid #00ffff' : '1px solid #444';
-            slot.style.boxShadow = index === selectedSlotIndex ? '0 0 15px rgba(0,255,255,0.4)' : 'none';
+            slot.style.width = '80px';
+            slot.style.height = '80px';
+            slot.style.margin = '12px';
+            slot.style.backgroundColor = index === selectedSlotIndex ? 'rgba(0, 255, 255, 0.25)' : 'rgba(60, 60, 70, 0.6)';
+            slot.style.border = index === selectedSlotIndex ? '2px solid #00ffff' : '1px solid #555';
+            slot.style.boxShadow = index === selectedSlotIndex ? '0 0 20px rgba(0,255,255,0.5)' : 'none';
             slot.style.display = 'flex';
             slot.style.flexDirection = 'column';
             slot.style.alignItems = 'center';
             slot.style.justifyContent = 'center';
+            slot.style.borderRadius = '8px';
+            
             const hexColor = item.color.toString(16).padStart(6, '0');
             slot.style.color = '#' + hexColor;
-            slot.style.fontSize = '14px';
+            slot.style.fontSize = '15px';
             slot.style.textAlign = 'center';
             slot.style.cursor = 'pointer';
             slot.style.transition = 'all 0.2s';
+            slot.style.fontWeight = index === selectedSlotIndex ? 'bold' : 'normal';
             
-            slot.innerHTML = `<span>${item.name}</span><span style="font-size:10px;color:gray">[${index + 1}]</span>`;
+            slot.innerHTML = `<span style="font-size:16px">${item.name}</span><span style="font-size:12px;color:#aaa;margin-top:4px">[${index + 1}]</span>`;
             
             slot.onmouseenter = () => {
                 if(index !== selectedSlotIndex) {
-                    slot.style.borderColor = '#888';
-                    slot.style.backgroundColor = 'rgba(80, 80, 80, 0.6)';
+                    slot.style.borderColor = '#aaa';
+                    slot.style.backgroundColor = 'rgba(80, 80, 90, 0.8)';
+                    slot.style.transform = 'scale(1.05)';
                 }
             };
             slot.onmouseleave = () => {
                 if(index !== selectedSlotIndex) {
-                    slot.style.borderColor = '#444';
-                    slot.style.backgroundColor = 'rgba(50, 50, 50, 0.5)';
+                    slot.style.borderColor = '#555';
+                    slot.style.backgroundColor = 'rgba(60, 60, 70, 0.6)';
+                    slot.style.transform = 'scale(1)';
                 }
             };
 
@@ -446,16 +461,18 @@ function updateUI() {
         
         const hint = document.createElement('div');
         const hintColor = inventory[selectedSlotIndex].color.toString(16).padStart(6, '0');
-        hint.innerText = `EQUIPPED: ${inventory[selectedSlotIndex].name}`;
+        hint.innerText = `当前装备：${inventory[selectedSlotIndex].name}`;
         hint.style.position = 'absolute';
-        hint.style.bottom = '20px';
-        hint.style.left = '20px';
+        hint.style.bottom = '30px';
+        hint.style.left = '30px';
         hint.style.color = '#' + hintColor;
-        hint.style.fontSize = '20px';
+        hint.style.fontSize = '22px';
         hint.style.fontWeight = 'bold';
-        hint.style.backgroundColor = 'rgba(0,0,0,0.6)';
-        hint.style.padding = '5px 10px';
+        hint.style.backgroundColor = 'rgba(0,0,0,0.7)';
+        hint.style.padding = '8px 15px';
         hint.style.border = `1px solid #${hintColor}`;
+        hint.style.borderRadius = '5px';
+        hint.style.boxShadow = `0 0 10px rgba(${parseInt(hintColor.substring(0,2),16)}, ${parseInt(hintColor.substring(2,4),16)}, ${parseInt(hintColor.substring(4,6),16)}, 0.5)`;
         hint.style.pointerEvents = 'none';
         uiContainer.appendChild(hint);
     }
@@ -463,17 +480,18 @@ function updateUI() {
     if (currentState === GAME_STATE.PLAYING || currentState === GAME_STATE.INVENTORY) {
         const info = document.createElement('div');
         info.style.position = 'absolute';
-        info.style.top = '10px';
-        info.style.left = '10px';
-        info.style.color = 'rgba(200, 200, 200, 0.8)';
-        info.style.fontSize = '14px';
-        info.style.fontFamily = 'Courier New, monospace';
+        info.style.top = '15px';
+        info.style.left = '15px';
+        info.style.color = 'rgba(255, 255, 255, 0.9)';
+        info.style.fontSize = '16px';
+        info.style.fontFamily = '"Microsoft YaHei", monospace';
         info.style.textShadow = '0 0 5px black';
         info.style.pointerEvents = 'none';
+        info.style.lineHeight = '1.6';
         info.innerHTML = `
-            POS: ${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}<br>
-            [WASD] MOVE | [SHIFT] RUN | [CTRL] CROUCH | [SPACE] JUMP<br>
-            [E] BAG | [1-9] ITEM | [ESC] MENU
+            <span style="color:#00ffff; font-weight:bold;">坐标:</span> ${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}<br>
+            <span style="color:#aaa;">[WASD]</span> 移动 &nbsp; <span style="color:#aaa;">[Shift]</span> 奔跑 &nbsp; <span style="color:#aaa;">[Ctrl]</span> 蹲下 &nbsp; <span style="color:#aaa;">[Space]</span> 跳跃<br>
+            <span style="color:#aaa;">[E]</span> 背包 &nbsp; <span style="color:#aaa;">[1-9]</span> 切换物品 &nbsp; <span style="color:#aaa;">[Esc]</span> 菜单
         `;
         uiContainer.appendChild(info);
     }
@@ -731,7 +749,6 @@ function animate() {
     updateGrid();
     
     if (renderer && scene && camera) {
-        // ✅ 直接使用 renderer.render，不再依赖 composer
         renderer.render(scene, camera);
     }
 }
