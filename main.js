@@ -36,15 +36,16 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置：极致亮度
+    // ✅ 视觉配置：极致黑底
     bgColor: 0x000000,       // 纯黑
     fogColor: 0x000000,
     fogDensity: 0.0005,     
     
     // 🔥 颜色配置：使用最亮的颜色
-    lineColorHouse: 0xffffff, // 纯白色 - 最亮！
-    lineColorDoor: 0xffddaa,  // 浅橙色 - 很亮！
-    lineColorGrid: 0x666666   // 中灰色网格 - 比之前亮很多
+    // 在 AdditiveBlending 下，这些颜色会呈现为极致的霓虹光
+    lineColorHouse: 0xffffff, // 纯白
+    lineColorDoor: 0xffddaa,  // 浅橙
+    lineColorGrid: 0x888888   // 亮灰 (比之前更亮)
 };
 
 // ==========================================
@@ -107,20 +108,19 @@ function init() {
     
     resetPlayer();
 
-    // ✅ 关键修改 1：开启抗锯齿，但使用线性颜色空间
+    // ✅ 关键修改：移除 colorSpace 设置以避免兼容性干扰
+    // 我们依靠 AdditiveBlending 来保证亮度，不依赖颜色空间转换
     renderer = new THREE.WebGLRenderer({ 
         antialias: true, 
-        powerPreference: "high-performance",
-        // 关键：使用线性颜色空间，避免 Gamma 校正压暗颜色
-        colorSpace: THREE.LinearSRGBColorSpace 
+        powerPreference: "high-performance"
     }); 
     
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 关键修改 2：禁用色调映射，确保颜色不被调整
+    // ✅ 禁用色调映射，确保原始颜色值输出
     renderer.toneMapping = THREE.NoToneMapping;
-    // 输出编码设置为 sRGB，但因为我们使用了 LinearSRGBColorSpace，颜色会正确显示
+    // 标准 sRGB 输出
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     
     document.body.appendChild(renderer.domElement);
@@ -168,7 +168,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 核心修复：线性颜色空间 + 高亮材质
+// 4. 场景构建 (Scene Building) - ✅ 核心修复：AdditiveBlending 暴力发光
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -197,21 +197,28 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 使用 MeshBasicMaterial + toneMapped: false
-    // 在线性颜色空间下，这些颜色会以最亮的状态显示
+    // ✅ 核心修复：使用 AdditiveBlending
+    // transparent: true 是启用 blending 的前提
+    // toneMapped: false 确保不被引擎压暗
+    // depthWrite: false 防止管子互相遮挡导致变暗
     const houseMaterial = new THREE.MeshBasicMaterial({ 
         color: CONFIG.lineColorHouse,
-        toneMapped: false, // 强制不经过色调映射
-        depthWrite: false  // 防止深度写入导致的遮挡问题
+        transparent: true,
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending, // 加法混合：颜色直接叠加，无视背景黑度
+        depthWrite: false,
+        toneMapped: false
     });
     
     const doorMaterial = new THREE.MeshBasicMaterial({ 
         color: CONFIG.lineColorDoor,
-        toneMapped: false,
-        depthWrite: false
+        transparent: true,
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
     });
 
-    // 辅助函数：创建有厚度的管子
     function createThickLine(start, end, material, thickness = 0.5) {
         const path = new THREE.CatmullRomCurve3([start, end]);
         const geometry = new THREE.TubeGeometry(path, 1, thickness, 4, false);
@@ -220,7 +227,7 @@ function createHouseLines() {
         return mesh;
     }
 
-    // 生成房子边框 (厚度 0.8，非常显眼)
+    // 生成房子边框 (厚度 0.8)
     edges.forEach(pair => {
         const lineMesh = createThickLine(v[pair[0]], v[pair[1]], houseMaterial, 0.8);
         houseLinesGroup.add(lineMesh);
@@ -252,13 +259,14 @@ function createGrid() {
     
     gridHelper = new THREE.Group();
     
-    // ✅ 网格也使用更亮的颜色和相同的材质设置
+    // ✅ 网格也使用加法混合，确保在黑色背景下清晰可见
     const gridMaterial = new THREE.MeshBasicMaterial({ 
         color: CONFIG.lineColorGrid,
         transparent: true,
-        opacity: 0.6, // 提高透明度
-        toneMapped: false,
-        depthWrite: false
+        opacity: 0.5, // 稍微透明一点，避免太抢戏
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false
     });
 
     function createLineStrip(isHorizontal) {
@@ -277,7 +285,7 @@ function createGrid() {
             }
 
             const path = new THREE.CatmullRomCurve3([start, end]);
-            const geometry = new THREE.TubeGeometry(path, 1, 0.3, 3, false); // 网格线稍细一点
+            const geometry = new THREE.TubeGeometry(path, 1, 0.3, 3, false);
             const mesh = new THREE.Mesh(geometry, gridMaterial);
             mesh.renderOrder = 1;
             gridHelper.add(mesh);
