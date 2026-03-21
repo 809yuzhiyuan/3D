@@ -36,17 +36,16 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置：暴力高亮版
+    // ✅ 视觉配置：高对比度
     bgColor: 0x000000,       // 纯黑
     fogColor: 0x000000,
-    fogDensity: 0.0005,      // 雾更淡，减少遮挡
+    fogDensity: 0.0005,      // 极淡的雾
     
-    // 🔥 暴力颜色：使用极亮的颜色，甚至直接白色
-    lineColorHouse: 0xffffff, // 纯白！最亮！
-    lineColorDoor: 0xffaa00,  // 亮橙色
+    // 🔥 颜色配置：使用高饱和度的霓虹色
+    lineColorHouse: 0x00ffff, // 青色 (Cyan)
+    lineColorDoor: 0xffaa00,  // 橙色 (Orange)
+    lineColorGrid: 0x333333   // 深灰网格
     
-    gridColorMajor: 0x444444, 
-    gridColorMinor: 0x222222
 };
 
 // ==========================================
@@ -109,12 +108,12 @@ function init() {
     
     resetPlayer();
 
-    // ✅ 关键修改：关闭 antialias，让线条像素更锐利、更实心
-    renderer = new THREE.WebGLRenderer({ antialias: false }); 
+    // ✅ 关键：开启抗锯齿让边缘平滑，但我们会用几何体保证主体亮度
+    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 关键修改：禁用色调映射，直接使用原始颜色值，避免变暗
+    // ✅ 关键：禁用色调映射，确保颜色不被压暗，保持最亮
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.outputEncoding = THREE.sRGBEncoding;
     document.body.appendChild(renderer.domElement);
@@ -162,7 +161,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 暴力高亮修复
+// 4. 场景构建 (Scene Building) - ✅ 核心修复：使用粗管子代替细线
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -191,36 +190,35 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 核心修复：使用 AdditiveBlending + 纯白颜色 + 不透明
-    // 这样线条会在黑色背景上直接显示为最亮的白色
-    const lineMaterial = new THREE.LineBasicMaterial({ 
-        color: CONFIG.lineColorHouse, 
-        transparent: false,   // 不透明
-        opacity: 1.0,         // 完全 opaque
-        blending: THREE.AdditiveBlending, // 加法混合，越重叠越亮
-        depthTest: true,
-        depthWrite: false,    // 防止遮挡
-        toneMapped: false     // 不受色调映射影响
+    // ✅ 使用 MeshBasicMaterial：不受光照影响，永远最亮
+    const houseMaterial = new THREE.MeshBasicMaterial({ 
+        color: CONFIG.lineColorHouse,
+        toneMapped: false // 强制不经过色调映射
     });
     
-    const doorMaterial = new THREE.LineBasicMaterial({ 
-        color: CONFIG.lineColorDoor, 
-        transparent: false, 
-        opacity: 1.0,
-        blending: THREE.AdditiveBlending,
-        depthTest: true,
-        depthWrite: false,
+    const doorMaterial = new THREE.MeshBasicMaterial({ 
+        color: CONFIG.lineColorDoor,
         toneMapped: false
     });
 
+    // ✅ 辅助函数：创建有厚度的管子
+    function createThickLine(start, end, material, thickness = 0.5) {
+        // 创建路径
+        const path = new THREE.CatmullRomCurve3([start, end]);
+        // 创建管子几何体：radius=thickness, tubularSegments=1 (一段即可), radialSegments=4 (四方柱，省性能)
+        const geometry = new THREE.TubeGeometry(path, 1, thickness, 4, false);
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.renderOrder = 10;
+        return mesh;
+    }
+
+    // 生成房子边框 (厚度 0.6，非常显眼)
     edges.forEach(pair => {
-        const points = [v[pair[0]], v[pair[1]]];
-        const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const line = new THREE.Line(geometry, lineMaterial);
-        line.renderOrder = 10;
-        houseLinesGroup.add(line);
+        const lineMesh = createThickLine(v[pair[0]], v[pair[1]], houseMaterial, 0.6);
+        houseLinesGroup.add(lineMesh);
     });
 
+    // 生成门框
     const groundY = c.y - hh;
     const doorTop = groundY + CONFIG.doorHeight;
     const frontZ = c.z + hd;
@@ -234,23 +232,57 @@ function createHouseLines() {
     const doorEdges = [[dBL, dTL], [dTL, dTR], [dTR, dBR]];
 
     doorEdges.forEach(pair => {
-        const geometry = new THREE.BufferGeometry().setFromPoints(pair);
-        const line = new THREE.Line(geometry, doorMaterial);
-        line.renderOrder = 10;
-        houseLinesGroup.add(line);
+        // 门框稍微粗一点
+        const lineMesh = createThickLine(pair[0], pair[1], doorMaterial, 0.8);
+        houseLinesGroup.add(lineMesh);
     });
 }
 
 function createGrid() {
+    // ✅ 同样使用粗管子生成网格，而不是细线 GridHelper
     const size = CONFIG.gridRadius * 2;
-    const divisions = CONFIG.gridRadius * 2 / CONFIG.gridStep;
+    const step = CONFIG.gridStep;
+    const halfSize = size / 2;
     
-    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.gridColorMajor, CONFIG.gridColorMinor);
+    gridHelper = new THREE.Group();
+    
+    const gridMaterial = new THREE.MeshBasicMaterial({ 
+        color: CONFIG.lineColorGrid,
+        transparent: true,
+        opacity: 0.5,
+        toneMapped: false
+    });
+
+    function createLineStrip(isHorizontal) {
+        const count = size / step;
+        
+        for (let i = 0; i <= count; i++) {
+            const pos = -halfSize + i * step;
+            let start, end;
+            
+            if (isHorizontal) {
+                // 横线
+                start = new THREE.Vector3(-halfSize, 0, pos);
+                end = new THREE.Vector3(halfSize, 0, pos);
+            } else {
+                // 竖线
+                start = new THREE.Vector3(pos, 0, -halfSize);
+                end = new THREE.Vector3(pos, 0, halfSize);
+            }
+
+            const path = new THREE.CatmullRomCurve3([start, end]);
+            // 网格线细一点 (0.2)
+            const geometry = new THREE.TubeGeometry(path, 1, 0.2, 3, false);
+            const mesh = new THREE.Mesh(geometry, gridMaterial);
+            mesh.renderOrder = 1;
+            gridHelper.add(mesh);
+        }
+    }
+
+    createLineStrip(true);
+    createLineStrip(false);
+
     gridHelper.position.y = 0;
-    gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.4;
-    gridHelper.material.blending = THREE.AdditiveBlending;
-    gridHelper.material.depthWrite = false;
     gridHelper.renderOrder = 1;
     scene.add(gridHelper);
 }
@@ -287,7 +319,6 @@ function createCrosshair() {
 
 // ==========================================
 // 5. UI 系统 (UI System)
-// (保持与之前相同，确保按钮可见)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
