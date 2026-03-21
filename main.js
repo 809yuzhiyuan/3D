@@ -36,17 +36,17 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置修复版
-    bgColor: 0x000000,       // 纯黑背景，对比度最强
+    // ✅ 视觉配置：暴力高亮版
+    bgColor: 0x000000,       // 纯黑
     fogColor: 0x000000,
-    fogDensity: 0.0015,      // 稍微浓一点的雾，增加深邃感，但线条要特殊处理
+    fogDensity: 0.0005,      // 雾更淡，减少遮挡
     
-    // 🔥 修复：使用高饱和度的纯色，配合 AdditiveBlending 实现发光
-    lineColorHouse: 0x00ffff, // 纯青色
-    lineColorDoor: 0xffaa00,  // 纯橙色
+    // 🔥 暴力颜色：使用极亮的颜色，甚至直接白色
+    lineColorHouse: 0xffffff, // 纯白！最亮！
+    lineColorDoor: 0xffaa00,  // 亮橙色
     
-    gridColorMajor: 0x333333, 
-    gridColorMinor: 0x111111
+    gridColorMajor: 0x444444, 
+    gridColorMinor: 0x222222
 };
 
 // ==========================================
@@ -109,13 +109,14 @@ function init() {
     
     resetPlayer();
 
-    renderer = new THREE.WebGLRenderer({ antialias: true }); 
+    // ✅ 关键修改：关闭 antialias，让线条像素更锐利、更实心
+    renderer = new THREE.WebGLRenderer({ antialias: false }); 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 修复：降低曝光度，避免过曝发灰，依靠混合模式提亮
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2; 
+    // ✅ 关键修改：禁用色调映射，直接使用原始颜色值，避免变暗
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputEncoding = THREE.sRGBEncoding;
     document.body.appendChild(renderer.domElement);
 
     createHouseLines();
@@ -161,7 +162,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 核心修复
+// 4. 场景构建 (Scene Building) - ✅ 暴力高亮修复
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -190,22 +191,23 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 核心修复：使用 AdditiveBlending (加法混合)
-    // 这会让线条颜色直接叠加到黑色背景上，产生明亮的发光效果
-    // 即使只有 1 像素宽，也会非常亮
+    // ✅ 核心修复：使用 AdditiveBlending + 纯白颜色 + 不透明
+    // 这样线条会在黑色背景上直接显示为最亮的白色
     const lineMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorHouse, 
-        transparent: false,
-        blending: THREE.AdditiveBlending, // 关键：加法混合
+        transparent: false,   // 不透明
+        opacity: 1.0,         // 完全 opaque
+        blending: THREE.AdditiveBlending, // 加法混合，越重叠越亮
         depthTest: true,
-        depthWrite: false, // 防止线条互相遮挡变暗
-        toneMapped: false  // 关键：不受色调映射曝光度影响，保持原色亮度
+        depthWrite: false,    // 防止遮挡
+        toneMapped: false     // 不受色调映射影响
     });
     
     const doorMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorDoor, 
         transparent: false, 
-        blending: THREE.AdditiveBlending, // 关键：加法混合
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending,
         depthTest: true,
         depthWrite: false,
         toneMapped: false
@@ -246,8 +248,8 @@ function createGrid() {
     gridHelper = new THREE.GridHelper(size, divisions, CONFIG.gridColorMajor, CONFIG.gridColorMinor);
     gridHelper.position.y = 0;
     gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.3;
-    gridHelper.material.blending = THREE.AdditiveBlending; // 网格也亮一点
+    gridHelper.material.opacity = 0.4;
+    gridHelper.material.blending = THREE.AdditiveBlending;
     gridHelper.material.depthWrite = false;
     gridHelper.renderOrder = 1;
     scene.add(gridHelper);
@@ -262,7 +264,7 @@ function createCrosshair() {
     ctx.strokeStyle = '#ffffff'; 
     ctx.lineWidth = 2;
     ctx.shadowBlur = 4;
-    ctx.shadowColor = '#00ffff';
+    ctx.shadowColor = '#ffffff';
     
     ctx.beginPath();
     ctx.moveTo(16, 6); ctx.lineTo(16, 26);
@@ -285,7 +287,7 @@ function createCrosshair() {
 
 // ==========================================
 // 5. UI 系统 (UI System)
-// (保持不变，略缩展示以节省空间，逻辑同前)
+// (保持与之前相同，确保按钮可见)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
@@ -302,8 +304,6 @@ function createUI() {
 
 function updateUI() {
     uiContainer.innerHTML = '';
-    // ... (此处省略具体的 UI 绘制代码，与之前版本相同，确保按钮可见即可)
-    // 为了简洁，仅保留关键逻辑结构，实际使用时请填入之前的完整 UI 代码
     
     const createButton = (text, y, onClick) => {
         const btn = document.createElement('div');
