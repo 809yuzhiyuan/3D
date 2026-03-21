@@ -6,46 +6,47 @@ import * as THREE from 'three';
 const CONFIG = {
     windowWidth: window.innerWidth,
     windowHeight: window.innerHeight,
-    gridRadius: 5000,
-    gridStep: 100, // 稍微加大网格间距，减少视觉杂乱
-    nearClip: 1.0,
+    gridRadius: 6000,
+    gridStep: 100,
+    nearClip: 0.5, // 减小近裁剪面，防止穿模
     fov: Math.PI / 4,
     
     // 玩家属性
-    playerHeightStand: 1.7, // 调整为正常人身高
+    playerHeightStand: 1.7,
     playerHeightCrouch: 0.9,
     playerRadius: 0.4,
-    groundY: 0.0, // 地面归零，更符合直觉
+    groundY: 0.0,
     
-    // 移动参数 (手感优化：增加惯性平滑)
-    walkSpeed: 12.0,
-    sprintSpeed: 40.0,
+    // 移动参数 (后朋克风格：稍微沉重一点的手感)
+    walkSpeed: 10.0,
+    sprintSpeed: 35.0,
     crouchSpeed: 2.0,
-    jumpForce: 12.0,
-    gravity: 30.0,
+    jumpForce: 10.0,
+    gravity: 25.0,
     mouseSensitivity: 0.002,
-    smoothFactor: 0.15, // 移动平滑系数
+    smoothFactor: 0.2, 
     
     // 房子配置
     houseLength: 100.0,
     houseHeight: 40.0,
     houseDepth: 80.0,
-    doorWidth: 15.0,
+    doorWidth: 18.0,  // 门宽一点
     doorHeight: 25.0,
     
     houseCenter: new THREE.Vector3(0, 20, -50),
-    spawnPosition: new THREE.Vector3(0, 2, -80),
+    spawnPosition: new THREE.Vector3(0, 2, -90), // 出生点远一点，给视野
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置：赛博朋克风格
-    bgColor: 0x050505,       // 极深灰，比纯黑更有质感
-    fogColor: 0x050505,
-    fogDensity: 0.0015,      // 适度的雾，增加景深
+    // 🎨 后朋克视觉配置
+    bgColor: 0x080808,       // 深灰黑，带一点噪点感
+    fogColor: 0x080808,
+    fogDensity: 0.002,       // 浓雾，制造压抑感
     
-    // 🔥 霓虹颜色配置
-    neonHouse: 0x00ffff,     // 青色霓虹
-    neonDoor: 0xff0055,      // 洋红霓虹
-    neonGrid: 0x222222       // 暗灰网格，不抢戏
+    // 颜色：高对比度，冷峻
+    lineCore: 0xffffff,      // 核心：纯白，最亮
+    lineGlow: 0xcccccc,      // 光晕：浅灰，模拟老旧投影的散射
+    lineDoor: 0xff3333,      // 门：警示红，危险感
+    lineGrid: 0x333333       // 网格：暗灰，低调
 };
 
 // ==========================================
@@ -56,7 +57,6 @@ let moveForward = false, moveBackward = false, moveLeft = false, moveRight = fal
 let isSprinting = false;
 let isCrouching = false;
 
-// 平滑移动变量
 const currentVelocity = new THREE.Vector3();
 const targetVelocity = new THREE.Vector3();
 
@@ -76,27 +76,28 @@ let currentState = GAME_STATE.MENU;
 let isMouseCaptured = false;
 
 const inventory = [
-    { name: "光剑", color: 0x00ffff },
-    { name: "纳米药", color: 0x00ff00 },
-    { name: "全息图", color: 0xffff00 },
-    { name: "密钥", color: 0xff0055 },
-    { name: "护盾", color: 0x0000ff },
-    { name: "能量块", color: 0xffaa00 },
-    { name: "芯片", color: 0xff00ff },
-    { name: "数据盘", color: 0xffffff },
-    { name: "空槽", color: 0x333333 }
+    { name: "撬棍", color: 0xdddddd },
+    { name: "胶带", color: 0xeeeeee },
+    { name: "磁带", color: 0xff3333 },
+    { name: "照片", color: 0xaaaaaa },
+    { name: "打火机", color: 0xffaa00 },
+    { name: "笔记", color: 0xffffff },
+    { name: "钥匙", color: 0x888888 },
+    { name: "收音机", color: 0x555555 },
+    { name: "空槽", color: 0x222222 }
 ];
 let selectedSlotIndex = 0;
 
-let neonGroup; // 存放所有霓虹线条
+let neonGroup;
 let gridHelper;
 let crosshair;
 let uiContainer;
+let noiseMesh; // 噪点层
 
 let prevTime = performance.now();
 
 // ==========================================
-// 3. 初始化 (Initialization) - ✅ 优化渲染设置
+// 3. 初始化 (Initialization)
 // ==========================================
 init();
 animate();
@@ -110,23 +111,22 @@ function init() {
     
     resetPlayer();
 
-    // ✅ 关键优化：开启抗锯齿 + 高精度像素比
-    // 现在的显卡性能足够，开启抗锯齿能让线条边缘平滑，消除闪烁
+    // ✅ 关键：开启抗锯齿，保证线条锐利
     renderer = new THREE.WebGLRenderer({ 
         antialias: true, 
         powerPreference: "high-performance",
-        alpha: false
+        preserveDrawingBuffer: true // 用于后续可能的后处理
     }); 
     
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // 稍微降低像素比增加颗粒感
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // 色调映射：使用 Reinhard 或 Uncharted 可以让高光更自然，但为了纯霓虹风，我们用 NoToneMapping + 手动发光
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     
     document.body.appendChild(renderer.domElement);
 
+    createNoiseOverlay(); // 添加噪点层
     createNeonWorld();
     createCrosshair();
     createUI();
@@ -151,11 +151,7 @@ function init() {
 
 function onPointerLockChange() {
     const canvas = renderer.domElement;
-    if (document.pointerLockElement === canvas || document.mozPointerLockElement === canvas) {
-        isMouseCaptured = true;
-    } else {
-        isMouseCaptured = false;
-    }
+    isMouseCaptured = (document.pointerLockElement === canvas || document.mozPointerLockElement === canvas);
 }
 
 function resetPlayer() {
@@ -169,13 +165,52 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 - ✅ 核心：双层霓虹光管技术
+// 4. 场景构建 - ✅ 核心修复：深度测试关闭 + 后朋克风格
 // ==========================================
+
+// 添加全屏噪点，模拟老式录像带/胶片感
+function createNoiseOverlay() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 256, 256);
+    
+    // 绘制随机噪点
+    for (let i = 0; i < 10000; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 256;
+        const opacity = Math.random() * 0.15; // 低透明度噪点
+        ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+        ctx.fillRect(x, y, 2, 2);
+    }
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.magFilter = THREE.NearestFilter; // 保持颗粒感
+    
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.08, // 淡淡的噪点
+        depthTest: false,
+        depthWrite: false,
+        renderOrder: 9999 // 最后渲染，覆盖一切
+    });
+    
+    noiseMesh = new THREE.Mesh(geometry, material);
+    noiseMesh.frustumCulled = false; // 始终可见
+    scene.add(noiseMesh);
+}
+
 function createNeonWorld() {
     neonGroup = new THREE.Group();
+    // 不需要添加到 scene 的特定位置，因为它只是线条容器
     scene.add(neonGroup);
 
-    // --- 1. 创建房子数据 ---
     const hl = CONFIG.houseLength / 2;
     const hd = CONFIG.houseDepth / 2;
     const hh = CONFIG.houseHeight / 2;
@@ -203,14 +238,17 @@ function createNeonWorld() {
     const doorTop = groundY + CONFIG.doorHeight;
     const frontZ = c.z + hd;
     const dw = CONFIG.doorWidth / 2;
+    
+    // 门的位置：在正面墙 (Z = frontZ) 的中间
     const dBL = new THREE.Vector3(c.x - dw, groundY, frontZ);
     const dBR = new THREE.Vector3(c.x + dw, groundY, frontZ);
     const dTL = new THREE.Vector3(c.x - dw, doorTop, frontZ);
     const dTR = new THREE.Vector3(c.x + dw, doorTop, frontZ);
+    
     const doorEdges = [[dBL, dTL], [dTL, dTR], [dTR, dBR]];
 
-    // --- 2. 辅助函数：创建双层霓虹线 ---
-    function createNeonLine(points, colorCore, colorGlow, thicknessCore, thicknessGlow) {
+    // --- 核心修复函数：创建绝对明亮的线条 ---
+    function createPostPunkLine(points, color, isDoor = false) {
         const positions = [];
         for (let i = 0; i < points.length; i += 2) {
             positions.push(points[i].x, points[i].y, points[i].z);
@@ -219,81 +257,71 @@ function createNeonWorld() {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
-        // A. 核心层：高亮、不透明、较细
-        const matCore = new THREE.LineBasicMaterial({
-            color: colorCore,
-            linewidth: thicknessCore, // 注意：WebGL通常只支持1，但在高分屏下看起来够粗
+        // 材质设置：
+        // 1. depthTest: false -> 线条永远不被遮挡，解决“进去变暗”的核心！
+        // 2. depthWrite: false -> 不写入深度，避免干扰其他线条
+        // 3. renderOrder: 999 -> 最后绘制，覆盖在所有东西上面
+        // 4. toneMapped: false -> 颜色不被压暗
+        const material = new THREE.LineBasicMaterial({
+            color: color,
+            linewidth: isDoor ? 2 : 1, // 门稍微粗一点
             transparent: false,
-            toneMapped: false,
-            blending: THREE.NormalBlending,
-            depthWrite: false, // 防止遮挡闪烁
-            depthTest: true
+            opacity: 1.0,
+            depthTest: false,   // ✅ 关键：关闭深度测试
+            depthWrite: false,  // ✅ 关键：关闭深度写入
+            toneMapped: false,  // ✅ 关键：关闭色调映射
+            blending: THREE.NormalBlending
         });
-        const lineCore = new THREE.LineSegments(geometry, matCore);
-        lineCore.renderOrder = 2; // 后渲染，在最上层
 
-        // B. 光晕层：半透明、较粗、模拟发光
-        const matGlow = new THREE.LineBasicMaterial({
-            color: colorGlow,
-            linewidth: thicknessGlow,
-            transparent: true,
-            opacity: 0.4, // 柔和的光晕
-            toneMapped: false,
-            blending: THREE.AdditiveBlending, // 加法混合产生发光感
-            depthWrite: false,
-            depthTest: true
-        });
-        const lineGlow = new THREE.LineSegments(geometry.clone(), matGlow); // 克隆几何体以防冲突
-        lineGlow.renderOrder = 1; // 先渲染，在底层
-
-        const group = new THREE.Group();
-        group.add(lineGlow);
-        group.add(lineCore);
-        return group;
+        const line = new THREE.LineSegments(geometry, material);
+        line.renderOrder = 999; // ✅ 关键：最高渲染优先级
+        return line;
     }
 
-    // --- 3. 生成房子 ---
+    // 1. 房子主体 (白色/浅灰)
     const housePoints = [];
     edges.forEach(pair => {
         housePoints.push(v[pair[0]], v[pair[1]]);
     });
-    const houseNeon = createNeonLine(housePoints, 0xffffff, CONFIG.neonHouse, 1, 3);
-    neonGroup.add(houseNeon);
+    // 为了后朋克感，我们可以画两层：一层实线，一层稍微偏移的虚线（这里简化为单层高亮实线）
+    const houseLine = createPostPunkLine(housePoints, CONFIG.lineCore);
+    neonGroup.add(houseLine);
+    
+    // 加一层淡淡的光晕模拟投影不稳定
+    const glowLine = createPostPunkLine(housePoints, CONFIG.lineGlow);
+    glowLine.scale.set(1.02, 1.02, 1.02); // 稍微大一点点
+    glowLine.material.opacity = 0.3;
+    glowLine.material.transparent = true;
+    neonGroup.add(glowLine);
 
-    // --- 4. 生成门 ---
+    // 2. 门 (警示红)
     const doorPoints = [];
     doorEdges.forEach(pair => {
         doorPoints.push(pair[0], pair[1]);
     });
-    const doorNeon = createNeonLine(doorPoints, 0xffffff, CONFIG.neonDoor, 1, 4);
-    neonGroup.add(doorNeon);
+    const doorLine = createPostPunkLine(doorPoints, CONFIG.lineDoor, true);
+    neonGroup.add(doorLine);
+    
+    // 门的红光晕
+    const doorGlow = createPostPunkLine(doorPoints, 0x550000, true);
+    doorGlow.scale.set(1.05, 1.05, 1.05);
+    doorGlow.material.opacity = 0.4;
+    doorGlow.material.transparent = true;
+    neonGroup.add(doorGlow);
 
-    // --- 5. 生成网格 (使用 GridHelper + 自定义光晕) ---
+    // 3. 网格 (工业灰)
     const size = CONFIG.gridRadius * 2;
     const divisions = size / CONFIG.gridStep;
     
-    // 基础网格
-    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.neonGrid, CONFIG.neonGrid);
-    gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.3;
+    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.lineGrid, CONFIG.lineGrid);
+    gridHelper.material.depthTest = false; // 网格也浮在上面？不，网格应该在地上，但为了 visibility...
+    // 修正：网格应该有深度测试，否则会和地面混淆，但为了后朋克的“全息感”，我们让它半透明且不受遮挡
+    gridHelper.material.depthTest = false; 
     gridHelper.material.depthWrite = false;
-    gridHelper.renderOrder = 0;
+    gridHelper.material.transparent = true;
+    gridHelper.material.opacity = 0.4;
+    gridHelper.renderOrder = 100; // 比房子低，比背景高
     scene.add(gridHelper);
-
-    // 网格主轴线光晕 (每隔几步加一条亮线，增加速度感)
-    const axisPoints = [];
-    for (let i = -divisions/2; i <= divisions/2; i++) {
-        if (i % 5 === 0) { // 每5格加一条亮线
-            const pos = i * CONFIG.gridStep;
-            axisPoints.push(new THREE.Vector3(-size/2, 0, pos), new THREE.Vector3(size/2, 0, pos));
-            axisPoints.push(new THREE.Vector3(pos, 0, -size/2), new THREE.Vector3(pos, 0, size/2));
-        }
-    }
-    if (axisPoints.length > 0) {
-        const gridGlow = createNeonLine(axisPoints, 0x444444, 0x224466, 1, 2);
-        gridGlow.renderOrder = 0;
-        scene.add(gridGlow);
-    }
 }
 
 function createCrosshair() {
@@ -302,39 +330,32 @@ function createCrosshair() {
     canvas.height = 64;
     const ctx = canvas.getContext('2d');
     
-    // 绘制发光准星
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = '#00ffff';
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    
+    ctx.lineWidth = 2;
+    // 简单的十字，无发光，符合后朋克的冷峻
     ctx.beginPath();
-    ctx.moveTo(32, 12); ctx.lineTo(32, 24);
-    ctx.moveTo(32, 40); ctx.lineTo(32, 52);
-    ctx.moveTo(12, 32); ctx.lineTo(24, 32);
-    ctx.moveTo(40, 32); ctx.lineTo(52, 32);
+    ctx.moveTo(32, 16); ctx.lineTo(32, 24);
+    ctx.moveTo(32, 40); ctx.lineTo(32, 48);
+    ctx.moveTo(16, 32); ctx.lineTo(24, 32);
+    ctx.moveTo(40, 32); ctx.lineTo(48, 32);
     ctx.stroke();
-    
-    // 中心点
-    ctx.fillStyle = '#00ffff';
-    ctx.fillRect(30, 30, 4, 4);
     
     const texture = new THREE.CanvasTexture(canvas);
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.AdditiveBlending,
         depthTest: false,
-        toneMapped: false
+        depthWrite: false,
+        renderOrder: 9999
     });
     crosshair = new THREE.Sprite(material);
-    crosshair.scale.set(0.8, 0.8, 1);
-    crosshair.renderOrder = 999;
+    crosshair.scale.set(0.6, 0.6, 1);
+    crosshair.renderOrder = 9999;
     scene.add(crosshair);
 }
 
 // ==========================================
-// 5. UI 系统 (保持原有风格，微调配色)
+// 5. UI 系统 (后朋克风格：粗体、单色、终端感)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
@@ -344,7 +365,7 @@ function createUI() {
     uiContainer.style.width = '100%';
     uiContainer.style.height = '100%';
     uiContainer.style.pointerEvents = 'none'; 
-    uiContainer.style.fontFamily = '"Segoe UI", "Microsoft YaHei", sans-serif';
+    uiContainer.style.fontFamily = '"Courier New", Courier, monospace'; // 等宽字体
     document.body.appendChild(uiContainer);
     updateUI();
 }
@@ -357,75 +378,76 @@ function updateUI() {
         btn.innerText = text;
         Object.assign(btn.style, {
             position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: y + 'px',
-            width: '220px', height: '55px', backgroundColor: 'rgba(10, 10, 15, 0.85)',
-            border: '1px solid #00ffff', color: '#fff', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', fontSize: '22px', cursor: 'pointer', pointerEvents: 'auto',
-            boxShadow: '0 0 15px rgba(0, 255, 255, 0.4)', transition: 'all 0.2s',
-            textShadow: '0 0 8px #00ffff', fontWeight: '600', letterSpacing: '1px',
-            backdropFilter: 'blur(5px)', borderRadius: '4px'
+            width: '240px', height: '60px', backgroundColor: '#000',
+            border: '2px solid #fff', color: '#fff', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', fontSize: '20px', cursor: 'pointer', pointerEvents: 'auto',
+            boxShadow: '4px 4px 0px #333', transition: 'all 0.1s',
+            fontWeight: 'bold', letterSpacing: '2px', textTransform: 'uppercase'
         });
         
         btn.onmouseenter = () => {
-            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.2)';
-            btn.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.8)';
-            btn.style.transform = 'translateX(-50%) scale(1.05)';
+            btn.style.backgroundColor = '#fff';
+            btn.style.color = '#000';
+            btn.style.boxShadow = '6px 6px 0px #888';
+            btn.style.transform = 'translateX(-50%) translate(-2px, -2px)';
         };
         btn.onmouseleave = () => {
-            btn.style.backgroundColor = 'rgba(10, 10, 15, 0.85)';
-            btn.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
-            btn.style.transform = 'translateX(-50%) scale(1)';
+            btn.style.backgroundColor = '#000';
+            btn.style.color = '#fff';
+            btn.style.boxShadow = '4px 4px 0px #333';
+            btn.style.transform = 'translateX(-50%)';
         };
         btn.onclick = (e) => { e.stopPropagation(); onClick(); };
         return btn;
     };
 
     if (currentState === GAME_STATE.MENU) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.95)';
+        uiContainer.style.backgroundColor = '#050505';
         uiContainer.style.pointerEvents = 'auto';
         const title = document.createElement('h1');
-        title.innerText = "NEON ENGINE";
+        title.innerText = "POST_PUNK\nENGINE";
+        title.style.whiteSpace = 'pre-line';
         Object.assign(title.style, {
-            color: '#fff', textAlign: 'center', position: 'absolute', top: '120px', width: '100%',
-            fontSize: '80px', margin: '0', textShadow: '0 0 40px #00ffff, 0 0 80px #0088ff',
-            letterSpacing: '15px', fontWeight: '900', fontFamily: 'sans-serif'
+            color: '#fff', textAlign: 'center', position: 'absolute', top: '100px', width: '100%',
+            fontSize: '60px', margin: '0', letterSpacing: '5px', fontWeight: '900',
+            textShadow: '2px 2px 0 #333'
         });
         uiContainer.appendChild(title);
-        uiContainer.appendChild(createButton("START SYSTEM", 350, startGame));
-        uiContainer.appendChild(createButton("EXIT", 440, () => window.close()));
+        uiContainer.appendChild(createButton("START", 350, startGame));
+        uiContainer.appendChild(createButton("QUIT", 440, () => window.close()));
     } 
     else if (currentState === GAME_STATE.PAUSED) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.6)';
+        uiContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
         uiContainer.style.pointerEvents = 'auto';
         const title = document.createElement('h1');
-        title.innerText = "SYSTEM PAUSED";
+        title.innerText = "PAUSED";
         Object.assign(title.style, {
-            color: '#ff0055', textAlign: 'center', position: 'absolute', top: '150px', width: '100%',
-            fontSize: '60px', textShadow: '0 0 30px #ff0055', fontWeight: 'bold'
+            color: '#ff3333', textAlign: 'center', position: 'absolute', top: '150px', width: '100%',
+            fontSize: '50px', textShadow: '2px 2px 0 #550000', fontWeight: 'bold'
         });
         uiContainer.appendChild(title);
         uiContainer.appendChild(createButton("RESUME", 280, resumeGame));
-        uiContainer.appendChild(createButton("MAIN MENU", 370, goToMenu));
+        uiContainer.appendChild(createButton("MENU", 370, goToMenu));
     }
     else if (currentState === GAME_STATE.INVENTORY) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 5, 0.5)';
+        uiContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.85)';
         uiContainer.style.pointerEvents = 'auto';
         uiContainer.onclick = (e) => { if (e.target === uiContainer) toggleInventory(); };
         
         const invBox = document.createElement('div');
         Object.assign(invBox.style, {
             position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
-            width: '700px', minHeight: '400px', backgroundColor: 'rgba(10, 10, 15, 0.95)',
-            border: '1px solid #00ffff', boxShadow: '0 0 60px rgba(0, 255, 255, 0.3)',
-            display: 'flex', flexWrap: 'wrap', padding: '30px', boxSizing: 'border-box',
-            borderRadius: '8px', backdropFilter: 'blur(10px)'
+            width: '700px', minHeight: '400px', backgroundColor: '#111',
+            border: '2px solid #fff', boxShadow: '8px 8px 0px #333',
+            display: 'flex', flexWrap: 'wrap', padding: '20px', boxSizing: 'border-box'
         });
         invBox.onclick = (e) => e.stopPropagation(); 
         
         const title = document.createElement('div');
-        title.innerText = "INVENTORY MODULE";
+        title.innerText = "> INVENTORY";
         Object.assign(title.style, {
             width: '100%', color: '#fff', fontSize: '24px', marginBottom: '20px',
-            textAlign: 'center', textShadow: '0 0 10px #00ffff', fontWeight: 'bold', letterSpacing: '2px'
+            fontWeight: 'bold', borderBottom: '1px solid #333', paddingBottom: '10px'
         });
         invBox.appendChild(title);
 
@@ -435,19 +457,18 @@ function updateUI() {
             const hexColor = item.color.toString(16).padStart(6, '0');
             
             Object.assign(slot.style, {
-                width: '90px', height: '90px', margin: '10px',
-                backgroundColor: isSelected ? 'rgba(0, 255, 255, 0.15)' : 'rgba(40, 40, 50, 0.5)',
-                border: isSelected ? '2px solid #00ffff' : '1px solid #444',
-                boxShadow: isSelected ? '0 0 20px rgba(0,255,255,0.5)' : 'none',
+                width: '80px', height: '80px', margin: '10px',
+                backgroundColor: isSelected ? '#fff' : '#222',
+                border: isSelected ? '2px solid #ff3333' : '1px solid #444',
                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                borderRadius: '6px', color: '#' + hexColor, fontSize: '14px', textAlign: 'center',
-                cursor: 'pointer', transition: 'all 0.2s', fontWeight: isSelected ? 'bold' : 'normal'
+                color: isSelected ? '#000' : '#' + hexColor, fontSize: '12px', textAlign: 'center',
+                cursor: 'pointer', transition: 'all 0.1s', fontWeight: isSelected ? 'bold' : 'normal'
             });
             
-            slot.innerHTML = `<div style="font-size:20px; margin-bottom:5px">■</div><div>${item.name}</div><div style="font-size:10px;color:#666;margin-top:2px">[${index + 1}]</div>`;
+            slot.innerHTML = `<div style="font-size:24px; margin-bottom:5px">■</div><div>${item.name}</div>`;
             
-            slot.onmouseenter = () => { if(!isSelected) { slot.style.borderColor = '#888'; slot.style.transform = 'scale(1.05)'; } };
-            slot.onmouseleave = () => { if(!isSelected) { slot.style.borderColor = '#444'; slot.style.transform = 'scale(1)'; } };
+            slot.onmouseenter = () => { if(!isSelected) { slot.style.borderColor = '#888'; } };
+            slot.onmouseleave = () => { if(!isSelected) { slot.style.borderColor = '#444'; } };
             slot.onclick = (e) => { e.stopPropagation(); selectedSlotIndex = index; updateUI(); };
             invBox.appendChild(slot);
         });
@@ -455,13 +476,11 @@ function updateUI() {
         
         const hint = document.createElement('div');
         const hintColor = inventory[selectedSlotIndex].color.toString(16).padStart(6, '0');
-        hint.innerText = `EQUIPPED: ${inventory[selectedSlotIndex].name}`;
+        hint.innerText = `> EQUIPPED: ${inventory[selectedSlotIndex].name}`;
         Object.assign(hint.style, {
-            position: 'absolute', bottom: '40px', left: '40px', color: '#' + hintColor,
-            fontSize: '20px', fontWeight: 'bold', backgroundColor: 'rgba(0,0,0,0.8)',
-            padding: '10px 20px', border: `1px solid #${hintColor}`, borderRadius: '4px',
-            boxShadow: `0 0 15px rgba(${parseInt(hintColor.substring(0,2),16)}, ${parseInt(hintColor.substring(2,4),16)}, ${parseInt(hintColor.substring(4,6),16)}, 0.5)`,
-            pointerEvents: 'none', letterSpacing: '1px'
+            position: 'absolute', bottom: '30px', left: '30px', color: '#fff',
+            fontSize: '18px', fontWeight: 'bold', backgroundColor: '#000',
+            padding: '10px 15px', border: '1px solid #fff'
         });
         uiContainer.appendChild(hint);
     }
@@ -469,15 +488,14 @@ function updateUI() {
     if (currentState === GAME_STATE.PLAYING || currentState === GAME_STATE.INVENTORY) {
         const info = document.createElement('div');
         Object.assign(info.style, {
-            position: 'absolute', top: '20px', left: '20px', color: 'rgba(200, 200, 200, 0.9)',
-            fontSize: '14px', fontFamily: 'monospace', textShadow: '0 0 4px black',
-            pointerEvents: 'none', lineHeight: '1.8', backgroundColor: 'rgba(0,0,0,0.4)',
-            padding: '10px 15px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)'
+            position: 'absolute', top: '20px', left: '20px', color: '#aaa',
+            fontSize: '14px', fontFamily: '"Courier New", monospace',
+            pointerEvents: 'none', lineHeight: '1.6'
         });
         info.innerHTML = `
-            <span style="color:#00ffff; font-weight:bold;">POS:</span> ${camera.position.x.toFixed(0)} : ${camera.position.y.toFixed(0)} : ${camera.position.z.toFixed(0)}<br>
-            <span style="color:#666;">WASD</span> Move &nbsp; <span style="color:#666;">SHIFT</span> Sprint &nbsp; <span style="color:#666;">CTRL</span> Crouch &nbsp; <span style="color:#666;">SPACE</span> Jump<br>
-            <span style="color:#666;">E</span> Inventory &nbsp; <span style="color:#666;">ESC</span> Menu
+            <span style="color:#fff;">POS:</span> ${camera.position.x.toFixed(0)} ${camera.position.y.toFixed(0)} ${camera.position.z.toFixed(0)}<br>
+            <span style="color:#666;">[WASD]</span> MOVE &nbsp; <span style="color:#666;">[SHIFT]</span> RUN &nbsp; <span style="color:#666;">[SPACE]</span> JUMP<br>
+            <span style="color:#666;">[E]</span> BAG &nbsp; <span style="color:#666;">[ESC]</span> MENU
         `;
         uiContainer.appendChild(info);
     }
@@ -596,35 +614,63 @@ function onWindowResize() {
 }
 
 // ==========================================
-// 7. 物理与运动 (优化手感)
+// 7. 物理与碰撞 - ✅ 修复：门洞逻辑
 // ==========================================
 function checkHouseCollision(pos) {
     const hl = CONFIG.houseLength / 2;
     const hd = CONFIG.houseDepth / 2;
     const hh = CONFIG.houseHeight / 2;
     const c = CONFIG.houseCenter;
-    const minX = c.x - hl, maxX = c.x + hl;
-    const minZ = c.z - hd, maxZ = c.z + hd;
-    const minY = c.y - hh, maxY = c.y + hh;
     
-    // 简单的 AABB 碰撞
-    if (pos.y < minY - 5 || pos.y - CONFIG.playerHeightStand > maxY + 5) return false;
+    const minX = c.x - hl;
+    const maxX = c.x + hl;
+    const minZ = c.z - hd;
+    const maxZ = c.z + hd;
+    const minY = c.y - hh;
+    const maxY = c.y + hh;
+
+    // 1. 初步包围盒检测 (如果完全在外面，直接返回 false)
+    // 扩大一点检测范围，包含玩家半径
     if (pos.x < minX - CONFIG.playerRadius || pos.x > maxX + CONFIG.playerRadius ||
-        pos.z < minZ - CONFIG.playerRadius || pos.z > maxZ + CONFIG.playerRadius) return false;
+        pos.z < minZ - CONFIG.playerRadius || pos.z > maxZ + CONFIG.playerRadius ||
+        pos.y < minY - 2 || pos.y > maxY + 2) {
+        return false;
+    }
+
+    // 2. 高度检测 (如果在屋顶上或地下，不碰撞)
+    if (pos.y < minY || pos.y > maxY) {
+        return false;
+    }
+
+    // 3. 门洞检测 (核心修复)
+    // 门位于 Z = maxZ (前墙)
+    const doorLeft = c.x - CONFIG.doorWidth / 2;
+    const doorRight = c.x + CONFIG.doorWidth / 2;
+    const doorTop = minY + CONFIG.doorHeight;
     
-    // 门洞检测
-    const dw = CONFIG.doorWidth / 2;
-    const inX = pos.x > (c.x - dw) - CONFIG.playerRadius && pos.x < (c.x + dw) + CONFIG.playerRadius;
-    const inZ = pos.z > (c.z + hd) - 2.0 && pos.z < (c.z + hd) + 2.0;
-    if (inX && inZ) return false;
-    
-    return true;
+    // 定义门前的一个“安全通道”区域
+    // 如果玩家在门的 X 范围内，且 Y 低于门顶，且 Z 在前墙附近，则不碰撞
+    const inDoorX = pos.x > doorLeft - CONFIG.playerRadius && pos.x < doorRight + CONFIG.playerRadius;
+    const inDoorY = pos.y < doorTop;
+    const atFrontWall = pos.z > maxZ - 2.0 && pos.z < maxZ + 2.0; // 墙体厚度区域
+
+    if (inDoorX && inDoorY && atFrontWall) {
+        return false; // 这里是门，可以穿过
+    }
+
+    // 4. 墙体碰撞
+    // 如果在房子内部 (X, Z 都在范围内)，则碰撞
+    // 注意：因为前面已经排除了门洞，所以这里只要是内部就是撞墙
+    if (pos.x > minX && pos.x < maxX && pos.z > minZ && pos.z < maxZ) {
+        return true; 
+    }
+
+    return false;
 }
 
 function updatePhysics(delta) {
     if (currentState !== GAME_STATE.PLAYING) return;
 
-    // 1. 计算目标速度
     const speed = isCrouching ? CONFIG.crouchSpeed : (isSprinting ? CONFIG.sprintSpeed : CONFIG.walkSpeed);
     const forward = new THREE.Vector3();
     camera.getWorldDirection(forward);
@@ -642,30 +688,28 @@ function updatePhysics(delta) {
         targetVelocity.normalize().multiplyScalar(speed);
     }
 
-    // 2. 平滑插值 (Lerp) - 消除顿挫感
     currentVelocity.x += (targetVelocity.x - currentVelocity.x) * CONFIG.smoothFactor;
     currentVelocity.z += (targetVelocity.z - currentVelocity.z) * CONFIG.smoothFactor;
 
-    // 3. 应用移动并检测碰撞
     const moveStep = delta;
     let nextX = camera.position.x + currentVelocity.x * moveStep;
     let nextZ = camera.position.z + currentVelocity.z * moveStep;
     
-    // X轴碰撞
+    // X轴碰撞检测
     if (!checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) {
-        currentVelocity.x = 0; // 撞墙停止
+        currentVelocity.x = 0;
     } else {
         camera.position.x = nextX;
     }
     
-    // Z轴碰撞
+    // Z轴碰撞检测
     if (!checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) {
         currentVelocity.z = 0;
     } else {
         camera.position.z = nextZ;
     }
 
-    // 4. 重力与跳跃
+    // 重力
     currentVelocity.y -= CONFIG.gravity * delta;
     camera.position.y += currentVelocity.y * delta;
     
@@ -680,7 +724,6 @@ function updatePhysics(delta) {
         player.isGrounded = false;
     }
     
-    // 蹲下高度修正
     if (isCrouching && player.isGrounded) {
         camera.position.y = Math.max(camera.position.y, groundLevel);
     }
@@ -688,19 +731,16 @@ function updatePhysics(delta) {
 
 function updateGrid() {
     if (gridHelper && camera) {
-        // 网格跟随玩家，制造无限地面的错觉
         const step = CONFIG.gridStep;
         gridHelper.position.x = Math.floor(camera.position.x / step) * step;
         gridHelper.position.z = Math.floor(camera.position.z / step) * step;
     }
-    // 霓虹组也跟随？不，房子是固定的。如果需要无限世界，这里要特殊处理。
-    // 当前设计：房子固定，网格移动。
 }
 
 function animate() {
     requestAnimationFrame(animate);
     const time = performance.now();
-    const delta = Math.min((time - prevTime) / 1000, 0.1); // 限制最大delta防止卡顿时飞出
+    const delta = Math.min((time - prevTime) / 1000, 0.1);
     prevTime = time;
     
     if (currentState === GAME_STATE.PLAYING) {
