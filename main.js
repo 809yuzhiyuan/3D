@@ -89,47 +89,37 @@ init();
 animate();
 
 function init() {
-    // 1. 创建场景
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a14);
     scene.fog = new THREE.FogExp2(0x0a0a14, 0.0002);
 
-    // 2. 创建相机
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
     
-    // 3. 重置玩家
     resetPlayer();
 
-    // 4. 创建渲染器
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     document.body.appendChild(renderer.domElement);
 
-    // 5. 创建场景物体
     createHouseLines();
     createCrosshair();
     createUI();
 
-    // ✅【关键修复】事件监听绑定到 Canvas (renderer.domElement) 而不是 document
     const canvas = renderer.domElement;
 
-    // 键盘事件依然绑定在 document 上
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     window.addEventListener('resize', onWindowResize);
 
-    // ✅ 鼠标移动事件必须绑定在 Canvas 上才能正确获取 movementX/Y
     canvas.addEventListener('mousemove', onMouseMove, false);
     
-    // 点击 Canvas 请求锁定
     canvas.addEventListener('click', () => {
         if (currentState === GAME_STATE.PLAYING && !isMouseCaptured) {
             canvas.requestPointerLock();
         }
     }, false);
 
-    // ✅ 监听指针锁定状态变化
     document.addEventListener('pointerlockchange', onPointerLockChange, false);
     document.addEventListener('mozpointerlockchange', onPointerLockChange, false);
 }
@@ -142,7 +132,6 @@ function onPointerLockChange() {
     } else {
         console.log("❌ 指针锁定解除。");
         isMouseCaptured = false;
-        // 如果是在游戏中意外解除，可以选择暂停，这里暂时不自动暂停以免干扰
     }
 }
 
@@ -423,7 +412,6 @@ function startGame() {
     resetPlayer();
     updateUI();
     
-    // ✅ 延迟请求锁定，确保 UI 更新完成
     setTimeout(() => {
         renderer.domElement.requestPointerLock();
     }, 50);
@@ -518,7 +506,6 @@ function onKeyUp(event) {
 }
 
 function onMouseMove(event) {
-    // ✅ 只有当游戏进行中且鼠标已锁定时才处理视角
     if (currentState !== GAME_STATE.PLAYING || !isMouseCaptured) {
         return;
     }
@@ -526,7 +513,6 @@ function onMouseMove(event) {
     const movementX = event.movementX || event.mozMovementX || 0;
     const movementY = event.movementY || event.mozMovementY || 0;
 
-    // 如果 movement 为 0 但鼠标在动，可能是兼容性问题，但通常锁定后会有值
     if (movementX === 0 && movementY === 0) return;
 
     player.yaw -= movementX * CONFIG.mouseSensitivity;
@@ -550,7 +536,6 @@ function updateCameraRotation() {
 }
 
 function onMouseClick(event) {
-    // 此函数现在主要作为备用，主要逻辑已在 init 中的 canvas click 监听里
     if (currentState === GAME_STATE.PLAYING && !isMouseCaptured) {
         renderer.domElement.requestPointerLock();
     }
@@ -564,7 +549,7 @@ function onWindowResize() {
 }
 
 // ==========================================
-// 7. 物理与碰撞 (Physics & Collision)
+// 7. 物理与碰撞 (Physics & Collision) - ✅ 已修复
 // ==========================================
 function checkHouseCollision(pos) {
     const hl = CONFIG.houseLength / 2;
@@ -614,32 +599,43 @@ function updatePhysics(delta) {
 
     const speed = isCrouching ? CONFIG.crouchSpeed : (isSprinting ? CONFIG.sprintSpeed : CONFIG.walkSpeed);
 
-    player.direction.set(0, 0, 0);
-    if (moveForward) player.direction.z -= 1;
-    if (moveBackward) player.direction.z += 1;
-    if (moveLeft) player.direction.x -= 1;
-    if (moveRight) player.direction.x += 1;
+    // ✅【核心修复】使用 Three.js 内置向量计算，彻底解决方向不一致问题
+    
+    // 1. 获取相机朝向的前方向量 (在 XZ 平面上)
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0; // 忽略上下坡度，只在水平面移动
+    forward.normalize();
 
-    if (player.direction.lengthSq() > 0) {
-        player.direction.normalize();
-        
-        const sinY = Math.sin(player.yaw);
-        const cosY = Math.cos(player.yaw);
-        
-        const moveX = (player.direction.x * cosY - player.direction.z * sinY) * speed * delta;
-        const moveZ = (player.direction.x * sinY + player.direction.z * cosY) * speed * delta;
+    // 2. 获取相机的右方向量 (通过 前方 x 上方(0,1,0) 得到)
+    const right = new THREE.Vector3();
+    right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 
-        let nextX = camera.position.x + moveX;
+    // 3. 计算最终移动向量
+    const moveVector = new THREE.Vector3(0, 0, 0);
+
+    if (moveForward) moveVector.add(forward);
+    if (moveBackward) moveVector.sub(forward);
+    if (moveRight) moveVector.add(right);
+    if (moveLeft) moveVector.sub(right);
+
+    if (moveVector.lengthSq() > 0) {
+        moveVector.normalize().multiplyScalar(speed * delta);
+
+        // X 轴碰撞检测
+        let nextX = camera.position.x + moveVector.x;
         if (!checkHouseCollision(new THREE.Vector3(nextX, camera.position.y, camera.position.z))) {
-            camera.position.x += moveX;
+            camera.position.x += moveVector.x;
         }
         
-        let nextZ = camera.position.z + moveZ;
+        // Z 轴碰撞检测
+        let nextZ = camera.position.z + moveVector.z;
         if (!checkHouseCollision(new THREE.Vector3(camera.position.x, camera.position.y, nextZ))) {
-            camera.position.z += moveZ;
+            camera.position.z += moveVector.z;
         }
     }
 
+    // 重力处理
     player.velocity.y -= CONFIG.gravity * delta;
     camera.position.y += player.velocity.y * delta;
 
