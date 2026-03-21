@@ -36,16 +36,15 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置：高对比度
+    // ✅ 视觉配置：极致亮度
     bgColor: 0x000000,       // 纯黑
     fogColor: 0x000000,
-    fogDensity: 0.0005,      // 极淡的雾
+    fogDensity: 0.0005,     
     
-    // 🔥 颜色配置：使用高饱和度的霓虹色
-    lineColorHouse: 0x00ffff, // 青色 (Cyan)
-    lineColorDoor: 0xffaa00,  // 橙色 (Orange)
-    lineColorGrid: 0x333333   // 深灰网格
-    
+    // 🔥 颜色配置：使用最亮的颜色
+    lineColorHouse: 0xffffff, // 纯白色 - 最亮！
+    lineColorDoor: 0xffddaa,  // 浅橙色 - 很亮！
+    lineColorGrid: 0x666666   // 中灰色网格 - 比之前亮很多
 };
 
 // ==========================================
@@ -108,14 +107,22 @@ function init() {
     
     resetPlayer();
 
-    // ✅ 关键：开启抗锯齿让边缘平滑，但我们会用几何体保证主体亮度
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); 
+    // ✅ 关键修改 1：开启抗锯齿，但使用线性颜色空间
+    renderer = new THREE.WebGLRenderer({ 
+        antialias: true, 
+        powerPreference: "high-performance",
+        // 关键：使用线性颜色空间，避免 Gamma 校正压暗颜色
+        colorSpace: THREE.LinearSRGBColorSpace 
+    }); 
+    
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 关键：禁用色调映射，确保颜色不被压暗，保持最亮
+    // ✅ 关键修改 2：禁用色调映射，确保颜色不被调整
     renderer.toneMapping = THREE.NoToneMapping;
-    renderer.outputEncoding = THREE.sRGBEncoding;
+    // 输出编码设置为 sRGB，但因为我们使用了 LinearSRGBColorSpace，颜色会正确显示
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    
     document.body.appendChild(renderer.domElement);
 
     createHouseLines();
@@ -161,7 +168,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 核心修复：使用粗管子代替细线
+// 4. 场景构建 (Scene Building) - ✅ 核心修复：线性颜色空间 + 高亮材质
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -190,31 +197,32 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 使用 MeshBasicMaterial：不受光照影响，永远最亮
+    // ✅ 使用 MeshBasicMaterial + toneMapped: false
+    // 在线性颜色空间下，这些颜色会以最亮的状态显示
     const houseMaterial = new THREE.MeshBasicMaterial({ 
         color: CONFIG.lineColorHouse,
-        toneMapped: false // 强制不经过色调映射
+        toneMapped: false, // 强制不经过色调映射
+        depthWrite: false  // 防止深度写入导致的遮挡问题
     });
     
     const doorMaterial = new THREE.MeshBasicMaterial({ 
         color: CONFIG.lineColorDoor,
-        toneMapped: false
+        toneMapped: false,
+        depthWrite: false
     });
 
-    // ✅ 辅助函数：创建有厚度的管子
+    // 辅助函数：创建有厚度的管子
     function createThickLine(start, end, material, thickness = 0.5) {
-        // 创建路径
         const path = new THREE.CatmullRomCurve3([start, end]);
-        // 创建管子几何体：radius=thickness, tubularSegments=1 (一段即可), radialSegments=4 (四方柱，省性能)
         const geometry = new THREE.TubeGeometry(path, 1, thickness, 4, false);
         const mesh = new THREE.Mesh(geometry, material);
         mesh.renderOrder = 10;
         return mesh;
     }
 
-    // 生成房子边框 (厚度 0.6，非常显眼)
+    // 生成房子边框 (厚度 0.8，非常显眼)
     edges.forEach(pair => {
-        const lineMesh = createThickLine(v[pair[0]], v[pair[1]], houseMaterial, 0.6);
+        const lineMesh = createThickLine(v[pair[0]], v[pair[1]], houseMaterial, 0.8);
         houseLinesGroup.add(lineMesh);
     });
 
@@ -232,25 +240,25 @@ function createHouseLines() {
     const doorEdges = [[dBL, dTL], [dTL, dTR], [dTR, dBR]];
 
     doorEdges.forEach(pair => {
-        // 门框稍微粗一点
-        const lineMesh = createThickLine(pair[0], pair[1], doorMaterial, 0.8);
+        const lineMesh = createThickLine(pair[0], pair[1], doorMaterial, 1.0);
         houseLinesGroup.add(lineMesh);
     });
 }
 
 function createGrid() {
-    // ✅ 同样使用粗管子生成网格，而不是细线 GridHelper
     const size = CONFIG.gridRadius * 2;
     const step = CONFIG.gridStep;
     const halfSize = size / 2;
     
     gridHelper = new THREE.Group();
     
+    // ✅ 网格也使用更亮的颜色和相同的材质设置
     const gridMaterial = new THREE.MeshBasicMaterial({ 
         color: CONFIG.lineColorGrid,
         transparent: true,
-        opacity: 0.5,
-        toneMapped: false
+        opacity: 0.6, // 提高透明度
+        toneMapped: false,
+        depthWrite: false
     });
 
     function createLineStrip(isHorizontal) {
@@ -261,18 +269,15 @@ function createGrid() {
             let start, end;
             
             if (isHorizontal) {
-                // 横线
                 start = new THREE.Vector3(-halfSize, 0, pos);
                 end = new THREE.Vector3(halfSize, 0, pos);
             } else {
-                // 竖线
                 start = new THREE.Vector3(pos, 0, -halfSize);
                 end = new THREE.Vector3(pos, 0, halfSize);
             }
 
             const path = new THREE.CatmullRomCurve3([start, end]);
-            // 网格线细一点 (0.2)
-            const geometry = new THREE.TubeGeometry(path, 1, 0.2, 3, false);
+            const geometry = new THREE.TubeGeometry(path, 1, 0.3, 3, false); // 网格线稍细一点
             const mesh = new THREE.Mesh(geometry, gridMaterial);
             mesh.renderOrder = 1;
             gridHelper.add(mesh);
