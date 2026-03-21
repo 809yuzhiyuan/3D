@@ -36,16 +36,15 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉配置：极致黑底
+    // ✅ 视觉配置
     bgColor: 0x000000,       // 纯黑
     fogColor: 0x000000,
-    fogDensity: 0.0005,     
+    fogDensity: 0.0002,      // 雾非常淡，几乎不影响远处线条
     
-    // 🔥 颜色配置：使用最亮的颜色
-    // 在 AdditiveBlending 下，这些颜色会呈现为极致的霓虹光
-    lineColorHouse: 0xffffff, // 纯白
-    lineColorDoor: 0xffddaa,  // 浅橙
-    lineColorGrid: 0x888888   // 亮灰 (比之前更亮)
+    // 🔥 颜色配置：纯白最亮
+    lineColorHouse: 0xffffff, 
+    lineColorDoor: 0xffaa00,  
+    lineColorGrid: 0x444444   
 };
 
 // ==========================================
@@ -102,25 +101,26 @@ animate();
 function init() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.bgColor);
+    // 雾气保留，但密度很低，增加深邃感但不遮挡线条
     scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity); 
 
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
     
     resetPlayer();
 
-    // ✅ 关键修改：移除 colorSpace 设置以避免兼容性干扰
-    // 我们依靠 AdditiveBlending 来保证亮度，不依赖颜色空间转换
+    // ✅ 关键：关闭抗锯齿 (antialias: false) 
+    // 原因：在某些浏览器/驱动中，抗锯齿会让细线变得模糊且半透明，导致变暗。
+    // 关闭后，线条会是锐利的像素点，亮度最高（100% 不透明）。
     renderer = new THREE.WebGLRenderer({ 
-        antialias: true, 
+        antialias: false, 
         powerPreference: "high-performance"
     }); 
     
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制最大像素比，防止过糊
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
     
-    // ✅ 禁用色调映射，确保原始颜色值输出
+    // ✅ 禁用色调映射，确保 0xffffff 就是屏幕能显示的最亮
     renderer.toneMapping = THREE.NoToneMapping;
-    // 标准 sRGB 输出
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     
     document.body.appendChild(renderer.domElement);
@@ -168,7 +168,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 核心修复：AdditiveBlending 暴力发光
+// 4. 场景构建 (Scene Building) - ✅ 核心修复：回归 LineSegments + 锐利渲染
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -197,43 +197,39 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 核心修复：使用 AdditiveBlending
-    // transparent: true 是启用 blending 的前提
-    // toneMapped: false 确保不被引擎压暗
-    // depthWrite: false 防止管子互相遮挡导致变暗
-    const houseMaterial = new THREE.MeshBasicMaterial({ 
+    // ✅ 使用 LineBasicMaterial
+    // transparent: false 确保完全不透明，亮度最大化
+    // toneMapped: false 确保不被压暗
+    const houseMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorHouse,
-        transparent: true,
+        transparent: false,
         opacity: 1.0,
-        blending: THREE.AdditiveBlending, // 加法混合：颜色直接叠加，无视背景黑度
-        depthWrite: false,
-        toneMapped: false
+        toneMapped: false,
+        linewidth: 1 // 注意：大多数浏览器只支持 linewidth = 1
     });
     
-    const doorMaterial = new THREE.MeshBasicMaterial({ 
+    const doorMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorDoor,
-        transparent: true,
+        transparent: false,
         opacity: 1.0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
         toneMapped: false
     });
 
-    function createThickLine(start, end, material, thickness = 0.5) {
-        const path = new THREE.CatmullRomCurve3([start, end]);
-        const geometry = new THREE.TubeGeometry(path, 1, thickness, 4, false);
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.renderOrder = 10;
-        return mesh;
-    }
+    // 收集所有点
+    const houseGeometry = new THREE.BufferGeometry();
+    const housePositions = [];
 
-    // 生成房子边框 (厚度 0.8)
     edges.forEach(pair => {
-        const lineMesh = createThickLine(v[pair[0]], v[pair[1]], houseMaterial, 0.8);
-        houseLinesGroup.add(lineMesh);
+        housePositions.push(v[pair[0]].x, v[pair[0]].y, v[pair[0]].z);
+        housePositions.push(v[pair[1]].x, v[pair[1]].y, v[pair[1]].z);
     });
 
-    // 生成门框
+    houseGeometry.setAttribute('position', new THREE.Float32BufferAttribute(housePositions, 3));
+    const houseLine = new THREE.LineSegments(houseGeometry, houseMaterial);
+    houseLine.renderOrder = 10;
+    houseLinesGroup.add(houseLine);
+
+    // 门框
     const groundY = c.y - hh;
     const doorTop = groundY + CONFIG.doorHeight;
     const frontZ = c.z + hd;
@@ -244,57 +240,33 @@ function createHouseLines() {
     const dTL = new THREE.Vector3(c.x - dw, doorTop, frontZ);
     const dTR = new THREE.Vector3(c.x + dw, doorTop, frontZ);
 
-    const doorEdges = [[dBL, dTL], [dTL, dTR], [dTR, dBR]];
+    const doorPositions = [
+        dBL.x, dBL.y, dBL.z, dTL.x, dTL.y, dTL.z,
+        dTL.x, dTL.y, dTL.z, dTR.x, dTR.y, dTR.z,
+        dTR.x, dTR.y, dTR.z, dBR.x, dBR.y, dBR.z
+    ];
 
-    doorEdges.forEach(pair => {
-        const lineMesh = createThickLine(pair[0], pair[1], doorMaterial, 1.0);
-        houseLinesGroup.add(lineMesh);
-    });
+    const doorGeometry = new THREE.BufferGeometry();
+    doorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(doorPositions, 3));
+    const doorLine = new THREE.LineSegments(doorGeometry, doorMaterial);
+    doorLine.renderOrder = 10;
+    houseLinesGroup.add(doorLine);
 }
 
 function createGrid() {
+    // ✅ 使用原生的 GridHelper，它内部也是 LineSegments，性能最好
     const size = CONFIG.gridRadius * 2;
-    const step = CONFIG.gridStep;
-    const halfSize = size / 2;
+    const divisions = size / CONFIG.gridStep;
     
-    gridHelper = new THREE.Group();
+    gridHelper = new THREE.GridHelper(size, divisions, CONFIG.lineColorHouse, CONFIG.lineColorGrid);
     
-    // ✅ 网格也使用加法混合，确保在黑色背景下清晰可见
-    const gridMaterial = new THREE.MeshBasicMaterial({ 
-        color: CONFIG.lineColorGrid,
-        transparent: true,
-        opacity: 0.5, // 稍微透明一点，避免太抢戏
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        toneMapped: false
-    });
-
-    function createLineStrip(isHorizontal) {
-        const count = size / step;
-        
-        for (let i = 0; i <= count; i++) {
-            const pos = -halfSize + i * step;
-            let start, end;
-            
-            if (isHorizontal) {
-                start = new THREE.Vector3(-halfSize, 0, pos);
-                end = new THREE.Vector3(halfSize, 0, pos);
-            } else {
-                start = new THREE.Vector3(pos, 0, -halfSize);
-                end = new THREE.Vector3(pos, 0, halfSize);
-            }
-
-            const path = new THREE.CatmullRomCurve3([start, end]);
-            const geometry = new THREE.TubeGeometry(path, 1, 0.3, 3, false);
-            const mesh = new THREE.Mesh(geometry, gridMaterial);
-            mesh.renderOrder = 1;
-            gridHelper.add(mesh);
-        }
-    }
-
-    createLineStrip(true);
-    createLineStrip(false);
-
+    // 关键设置：让网格也遵循“不透明、无色调映射”原则
+    gridHelper.material.transparent = false;
+    gridHelper.material.opacity = 1.0;
+    gridHelper.material.toneMapped = false;
+    // 让主网格线和次网格线都亮一点，或者保持对比
+    // 这里我们简单处理，让整体都亮
+    
     gridHelper.position.y = 0;
     gridHelper.renderOrder = 1;
     scene.add(gridHelper);
@@ -308,9 +280,7 @@ function createCrosshair() {
     
     ctx.strokeStyle = '#ffffff'; 
     ctx.lineWidth = 2;
-    ctx.shadowBlur = 4;
-    ctx.shadowColor = '#ffffff';
-    
+    // 移除 shadowBlur 以提高性能并保证锐利度
     ctx.beginPath();
     ctx.moveTo(16, 6); ctx.lineTo(16, 26);
     ctx.moveTo(6, 16); ctx.lineTo(26, 16);
@@ -320,12 +290,12 @@ function createCrosshair() {
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.AdditiveBlending, // 准星可以用加法混合，因为它很小
         depthTest: false,
         toneMapped: false
     });
     crosshair = new THREE.Sprite(material);
-    crosshair.scale.set(0.6, 0.6, 1);
+    crosshair.scale.set(0.5, 0.5, 1);
     crosshair.renderOrder = 999;
     scene.add(crosshair);
 }
