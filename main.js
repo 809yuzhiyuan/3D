@@ -36,15 +36,19 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉优化配置 (更明亮)
-    bgColor: 0x1a1a24,       // 深灰蓝色，比纯黑亮
-    fogColor: 0x1a1a24,
-    fogDensity: 0.0015,      // 雾气稍淡，视野更清晰
-    lineColorHouse: 0x00ffff, // 亮青色
+    // ✅ 视觉优化配置 (极致亮度版)
+    bgColor: 0x101018,       // 稍微加深背景，以衬托更亮的线条
+    fogColor: 0x101018,
+    fogDensity: 0.0012,      // 雾淡一点，让远处线条也能看见
+    
+    // 🔥 高亮颜色配置
+    lineColorHouse: 0x00ffff, // 纯青色 (Cyan)
     lineColorDoor: 0xffaa00,  // 亮橙色
-    lineOpacity: 1.0,        // 完全不透明，最亮
-    gridColorMajor: 0x666666, // 亮灰色网格
-    gridColorMinor: 0x444444
+    lineOpacity: 1.0,        // 完全不透明
+    
+    // 🔥 网格颜色调亮
+    gridColorMajor: 0x888888, 
+    gridColorMinor: 0x555555
 };
 
 // ==========================================
@@ -72,7 +76,6 @@ const GAME_STATE = {
 let currentState = GAME_STATE.MENU;
 let isMouseCaptured = false;
 
-// ✅ 物品列表汉化
 const inventory = [
     { name: "铁剑", color: 0xC0C0C0 },
     { name: "治疗药水", color: 0xFF0000 },
@@ -100,27 +103,23 @@ init();
 animate();
 
 function init() {
-    // 1. 创建场景
     scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.bgColor);
-    // 设置雾气，让远处平滑过渡，不再是一片死黑
     scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity); 
 
-    // 2. 创建相机
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
     
     resetPlayer();
 
-    // 3. 创建渲染器
     renderer = new THREE.WebGLRenderer({ antialias: true }); 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
-    // 调整色调映射，让亮色更通透
+    
+    // ✅ 关键：使用 ACES 电影级色调映射，并大幅提高曝光度
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2; // 增加曝光度，让画面更亮
+    renderer.toneMappingExposure = 1.6; // 之前是 1.2，现在调到 1.6，让亮部更亮
     document.body.appendChild(renderer.domElement);
 
-    // 4. 创建场景物体
     createHouseLines();
     createGrid();
     createCrosshair();
@@ -164,7 +163,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 亮度优化
+// 4. 场景构建 (Scene Building) - 🔥 亮度核心修改
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -192,11 +191,14 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 使用正常混合模式，不透明，颜色鲜艳
+    // ✅ 核心修改：使用 AdditiveBlending (加法混合)
+    // 这会让线条颜色直接叠加到背景上，产生强烈的发光效果
     const lineMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorHouse, 
         transparent: false,
         opacity: CONFIG.lineOpacity,
+        blending: THREE.AdditiveBlending, // 🔥 发光关键
+        depthWrite: false,                // 防止线条互相遮挡变暗
         linewidth: 1 
     });
     
@@ -204,6 +206,8 @@ function createHouseLines() {
         color: CONFIG.lineColorDoor, 
         transparent: false, 
         opacity: 1.0,
+        blending: THREE.AdditiveBlending, // 🔥 发光关键
+        depthWrite: false,
         linewidth: 1 
     });
 
@@ -237,11 +241,13 @@ function createGrid() {
     const size = CONFIG.gridRadius * 2;
     const divisions = CONFIG.gridRadius * 2 / CONFIG.gridStep;
     
-    // ✅ 使用更亮的网格颜色
     gridHelper = new THREE.GridHelper(size, divisions, CONFIG.gridColorMajor, CONFIG.gridColorMinor);
     gridHelper.position.y = 0;
     gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.6; // 网格稍微明显一点
+    gridHelper.material.opacity = 0.5;
+    // 网格也使用加法混合，让它看起来像投射在地上的光网
+    gridHelper.material.blending = THREE.AdditiveBlending; 
+    gridHelper.material.depthWrite = false;
     scene.add(gridHelper);
 }
 
@@ -251,10 +257,10 @@ function createCrosshair() {
     canvas.height = 32;
     const ctx = canvas.getContext('2d');
     
-    // 准星改为白色带青色光晕，更清晰
+    // 准星纯白，带强烈光晕
     ctx.strokeStyle = '#ffffff'; 
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 4;
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 8;
     ctx.shadowColor = '#00ffff';
     
     ctx.beginPath();
@@ -266,16 +272,16 @@ function createCrosshair() {
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.NormalBlending,
+        blending: THREE.AdditiveBlending, // 🔥 准星也发光
         depthTest: false
     });
     crosshair = new THREE.Sprite(material);
-    crosshair.scale.set(0.5, 0.5, 1);
+    crosshair.scale.set(0.6, 0.6, 1);
     scene.add(crosshair);
 }
 
 // ==========================================
-// 5. UI 系统 (UI System) - ✅ 全中文
+// 5. UI 系统 (UI System)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
@@ -311,20 +317,22 @@ function updateUI() {
         btn.style.fontSize = '24px';
         btn.style.cursor = 'pointer';
         btn.style.pointerEvents = 'auto';
-        btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.3)';
+        btn.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
         btn.style.transition = 'all 0.3s';
-        btn.style.textShadow = '0 0 5px rgba(0,255,255,0.8)';
+        btn.style.textShadow = '0 0 8px rgba(0,255,255,1)';
         btn.style.fontWeight = 'bold';
         
         btn.onmouseenter = () => {
-            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.2)';
-            btn.style.boxShadow = '0 0 25px rgba(0, 255, 255, 0.8)';
+            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.25)';
+            btn.style.boxShadow = '0 0 30px rgba(0, 255, 255, 0.9)';
             btn.style.color = '#ffffff';
+            btn.style.textShadow = '0 0 15px #fff';
         };
         btn.onmouseleave = () => {
             btn.style.backgroundColor = 'rgba(30, 30, 40, 0.9)';
-            btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.3)';
+            btn.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.4)';
             btn.style.color = '#00ffff';
+            btn.style.textShadow = '0 0 8px rgba(0,255,255,1)';
         };
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -334,7 +342,7 @@ function updateUI() {
     };
 
     if (currentState === GAME_STATE.MENU) {
-        uiContainer.style.backgroundColor = 'rgba(26, 26, 36, 0.95)';
+        uiContainer.style.backgroundColor = 'rgba(16, 16, 24, 0.95)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
@@ -346,7 +354,7 @@ function updateUI() {
         title.style.width = '100%';
         title.style.fontSize = '72px';
         title.style.margin = '0';
-        title.style.textShadow = '0 0 30px #00ffff, 0 0 60px #00aaaa';
+        title.style.textShadow = '0 0 40px #00ffff, 0 0 80px #00aaaa';
         title.style.letterSpacing = '10px';
         title.style.fontWeight = '900';
         uiContainer.appendChild(title);
@@ -355,7 +363,7 @@ function updateUI() {
         uiContainer.appendChild(createButton("退出游戏", 400, () => alert("请关闭浏览器标签页")));
     } 
     else if (currentState === GAME_STATE.PAUSED) {
-        uiContainer.style.backgroundColor = 'rgba(26, 26, 36, 0.7)';
+        uiContainer.style.backgroundColor = 'rgba(16, 16, 24, 0.7)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
@@ -366,7 +374,7 @@ function updateUI() {
         title.style.top = '150px';
         title.style.width = '100%';
         title.style.fontSize = '56px';
-        title.style.textShadow = '0 0 20px #ffaa00';
+        title.style.textShadow = '0 0 30px #ffaa00';
         title.style.fontWeight = 'bold';
         uiContainer.appendChild(title);
 
@@ -375,7 +383,7 @@ function updateUI() {
         uiContainer.appendChild(createButton("设置", 420, () => alert("设置功能开发中...")));
     }
     else if (currentState === GAME_STATE.INVENTORY) {
-        uiContainer.style.backgroundColor = 'rgba(26, 26, 36, 0.6)';
+        uiContainer.style.backgroundColor = 'rgba(16, 16, 24, 0.6)';
         uiContainer.style.pointerEvents = 'auto';
 
         uiContainer.onclick = (e) => {
@@ -391,7 +399,7 @@ function updateUI() {
         invBox.style.height = '450px';
         invBox.style.backgroundColor = 'rgba(20, 20, 30, 0.95)';
         invBox.style.border = '2px solid #00ffff';
-        invBox.style.boxShadow = '0 0 40px rgba(0, 255, 255, 0.4)';
+        invBox.style.boxShadow = '0 0 50px rgba(0, 255, 255, 0.5)';
         invBox.style.display = 'flex';
         invBox.style.flexWrap = 'wrap';
         invBox.style.padding = '25px';
@@ -406,7 +414,7 @@ function updateUI() {
         title.style.fontSize = '28px';
         title.style.marginBottom = '25px';
         title.style.textAlign = 'center';
-        title.style.textShadow = '0 0 10px #00ffff';
+        title.style.textShadow = '0 0 15px #00ffff';
         title.style.fontWeight = 'bold';
         invBox.appendChild(title);
 
@@ -417,7 +425,7 @@ function updateUI() {
             slot.style.margin = '12px';
             slot.style.backgroundColor = index === selectedSlotIndex ? 'rgba(0, 255, 255, 0.25)' : 'rgba(60, 60, 70, 0.6)';
             slot.style.border = index === selectedSlotIndex ? '2px solid #00ffff' : '1px solid #555';
-            slot.style.boxShadow = index === selectedSlotIndex ? '0 0 20px rgba(0,255,255,0.5)' : 'none';
+            slot.style.boxShadow = index === selectedSlotIndex ? '0 0 25px rgba(0,255,255,0.6)' : 'none';
             slot.style.display = 'flex';
             slot.style.flexDirection = 'column';
             slot.style.alignItems = 'center';
@@ -472,7 +480,7 @@ function updateUI() {
         hint.style.padding = '8px 15px';
         hint.style.border = `1px solid #${hintColor}`;
         hint.style.borderRadius = '5px';
-        hint.style.boxShadow = `0 0 10px rgba(${parseInt(hintColor.substring(0,2),16)}, ${parseInt(hintColor.substring(2,4),16)}, ${parseInt(hintColor.substring(4,6),16)}, 0.5)`;
+        hint.style.boxShadow = `0 0 15px rgba(${parseInt(hintColor.substring(0,2),16)}, ${parseInt(hintColor.substring(2,4),16)}, ${parseInt(hintColor.substring(4,6),16)}, 0.6)`;
         hint.style.pointerEvents = 'none';
         uiContainer.appendChild(hint);
     }
@@ -482,7 +490,7 @@ function updateUI() {
         info.style.position = 'absolute';
         info.style.top = '15px';
         info.style.left = '15px';
-        info.style.color = 'rgba(255, 255, 255, 0.9)';
+        info.style.color = 'rgba(255, 255, 255, 0.95)';
         info.style.fontSize = '16px';
         info.style.fontFamily = '"Microsoft YaHei", monospace';
         info.style.textShadow = '0 0 5px black';
