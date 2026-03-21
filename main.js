@@ -55,7 +55,6 @@ const player = {
     crouching: false
 };
 
-// 输入状态
 const keys = {
     w: false, a: false, s: false, d: false,
     space: false, shift: false, ctrl: false
@@ -67,7 +66,6 @@ let currentState = STATE.MENU;
 let isLocked = false;
 
 const houses = [];
-let renderList = [];
 
 // ==========================================
 // 3. 初始化
@@ -116,7 +114,7 @@ function createWorld() {
     linesGroup = new THREE.Group();
     scene.add(linesGroup);
 
-    // 地面
+    // 地面 (高亮青色)
     const gridSize = 10000;
     const gridDivs = 400;
     const geoGrid = new THREE.GridHelper(gridSize, gridDivs, CONFIG.cGrid, CONFIG.cGrid);
@@ -130,7 +128,6 @@ function createWorld() {
     gridBright.position.y = 0.1;
     
     scene.add(gridGlow, gridBright);
-    renderList.push(gridGlow, gridBright);
 
     // 200座房子
     const cols = CONFIG.gridCols;
@@ -148,7 +145,6 @@ function createWorld() {
         const x = startX + col * CONFIG.spacing;
         const z = startZ + row * CONFIG.spacing;
         
-        // 留出出生点空地
         if (Math.abs(x) < 60 && Math.abs(z) < 60) continue;
 
         const house = {
@@ -183,7 +179,6 @@ function createHouseGeometry() {
     const points = [];
     const addLine = (x1,y1,z1, x2,y2,z2) => points.push(x1,y1,z1, x2,y2,z2);
 
-    // 楼层轮廓
     for(let i=0; i<=CONFIG.h; i+=CONFIG.floorH) {
         const y = i - hh;
         addLine(-hw, y, -hd, hw, y, -hd);
@@ -192,18 +187,15 @@ function createHouseGeometry() {
         addLine(-hw, y, hd, -hw, y, -hd);
     }
     
-    // 柱子
     const corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
     corners.forEach(([cx, cz]) => addLine(cx, -hh, cz, cx, hh, cz));
 
-    // 楼板网格
     for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
         const y = i - hh;
         for(let k=-hw; k<=hw; k+=20) addLine(k, y, -hd, k, y, hd);
         for(let k=-hd; k<=hd; k+=20) addLine(-hw, y, k, hw, y, k);
     }
 
-    // 楼梯
     const sx = -hw + 10, sz = hd - 5;
     let cx = sx, cz = sz, cy = -hh;
     let dir = -1;
@@ -262,12 +254,11 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 5. 物理与碰撞 (✅ 修复移动方向)
+// 5. 物理与碰撞
 // ==========================================
 function updatePhysics() {
     const dt = 0.016;
 
-    // 姿态
     if (keys.ctrl && !player.crouching) {
         player.crouching = true;
         player.pos.y = Math.max(player.pos.y, CONFIG.heightCrouch);
@@ -279,28 +270,25 @@ function updatePhysics() {
 
     const spd = player.crouching ? CONFIG.speedCrouch : (keys.shift ? CONFIG.speedRun : CONFIG.speedWalk);
 
-    // 计算方向向量
     const sinY = Math.sin(player.yaw);
     const cosY = Math.cos(player.yaw);
     
-    // 前方向量 (Z轴负方向是Three.js的默认前方，但这里我们根据yaw旋转)
-    // 当yaw=0时，fwd应该是 (0, 0, -1) 即向屏幕内
+    // 标准FPS向量计算
     const fwd = new THREE.Vector3(-sinY, 0, -cosY); 
     const right = new THREE.Vector3(-cosY, 0, sinY);
     
     const move = new THREE.Vector3(0,0,0);
 
-    // ✅ 核心修复：修正 WASD 逻辑
-    if (keys.w) move.add(fwd);       // W = 向前 (加前方向量)
-    if (keys.s) move.sub(fwd);       // S = 向后 (减前方向量)
-    if (keys.a) move.sub(right);     // A = 向左 (减右方向量 = 左)
-    if (keys.d) move.add(right);     // D = 向右 (加右方向量)
+    // W=前，S=后，A=左，D=右
+    if (keys.w) move.add(fwd);
+    if (keys.s) move.sub(fwd);
+    if (keys.a) move.sub(right);
+    if (keys.d) move.add(right);
 
     const len = move.length();
     if (len > 0) {
         move.normalize().multiplyScalar(spd * dt);
 
-        // 分轴碰撞
         const nextX = player.pos.clone(); nextX.x += move.x;
         if (!checkCollision(nextX)) player.pos.x = nextX.x;
 
@@ -308,7 +296,6 @@ function updatePhysics() {
         if (!checkCollision(nextZ)) player.pos.z = nextZ.z;
     }
 
-    // 跳跃重力
     if (keys.space && player.grounded && !player.crouching) {
         player.vel.y = CONFIG.jumpForce;
         player.grounded = false;
@@ -318,13 +305,11 @@ function updatePhysics() {
     player.pos.y += player.vel.y * dt;
 
     checkGroundAndStairs();
-    
     camera.position.copy(player.pos);
 }
 
 function checkCollision(pos) {
     const r = CONFIG.radius;
-    
     for (const h of houses) {
         if (Math.abs(pos.x - h.x) > CONFIG.w/2 + r + 10 || Math.abs(pos.z - h.z) > CONFIG.d/2 + r + 10) continue;
 
@@ -355,7 +340,6 @@ function checkCollision(pos) {
 
 function checkGroundAndStairs() {
     let supportY = 0;
-    
     for (const h of houses) {
         if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 5 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 5) continue;
         
@@ -436,7 +420,7 @@ function animate() {
 }
 
 // ==========================================
-// 7. 输入处理
+// 7. 输入处理 (✅ 视角强制反转修复)
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
@@ -481,9 +465,14 @@ function onKeyUp(e) {
 function onMouseMove(e) {
     if (currentState !== STATE.PLAYING || !isLocked) return;
     
-    // ✅ 视角左右修复：确保符号正确
-    player.yaw += e.movementX * CONFIG.sensitivity;
+    // ✅ 核心修复：强制反转 X 轴逻辑
+    // 如果之前是 +=，现在改为 -=。这会直接翻转左右视角的方向。
+    player.yaw -= e.movementX * CONFIG.sensitivity;
+    
+    // Y 轴保持常规 (鼠标向上 movementY 为负，减去负数等于加，视角向上)
     player.pitch -= e.movementY * CONFIG.sensitivity;
+    
+    // 限制垂直视角
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
 }
 
@@ -511,17 +500,12 @@ function updateUI() {
     uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
 
     if (currentState === STATE.PLAYING || currentState === STATE.INV) {
-        // 确定当前移动方向用于调试显示
         let dirStr = "STOP";
         if (keys.w) dirStr = "FWD ↑";
         if (keys.s) dirStr = "BACK ↓";
         if (keys.a) dirStr = "LEFT ←";
         if (keys.d) dirStr = "RIGHT →";
-        if (keys.w && keys.d) dirStr = "FWD-RIGHT ↗";
-        if (keys.w && keys.a) dirStr = "FWD-LEFT ↖";
-        if (keys.s && keys.d) dirStr = "BACK-RIGHT ↘";
-        if (keys.s && keys.a) dirStr = "BACK-LEFT ↙";
-
+        
         const info = document.createElement('div');
         Object.assign(info.style, { position:'absolute', top:'10px', left:'10px', fontSize:'14px', color:'#0F0', textShadow:'1px 1px 0 #000' });
         const floor = Math.floor(player.pos.y / CONFIG.floorH) + 1;
@@ -530,8 +514,8 @@ function updateUI() {
             FLOOR: ${floor}<br>
             DIR: <strong>${dirStr}</strong><br>
             KEYS: W[${keys.w?'ON':'OFF'}] S[${keys.s?'ON':'OFF'}] A[${keys.a?'ON':'OFF'}] D[${keys.d?'ON':'OFF'}]<br>
-            SHIFT[${keys.shift?'RUN':'WALK'}] CTRL[${keys.ctrl?'CROUCH':'STAND'}] SPACE[${keys.space?'JUMP':'--'}]<br>
-            HOUSES: ${CONFIG.count} | FPS: 60
+            SHIFT[${keys.shift?'RUN':'WALK'}] CTRL[${keys.ctrl?'CROUCH':'STAND'}]<br>
+            MOUSE: ${isLocked ? 'LOCKED' : 'FREE'}
         `;
         uiContainer.appendChild(info);
     }
@@ -582,8 +566,7 @@ function drawInventory() {
         width:'600px', minHeight:'400px', border:'2px solid #FFD700', background:'rgba(20,20,20,0.9)',
         padding:'20px', display:'flex', flexWrap:'wrap'
     });
-    box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">INVENTORY (Press E to Close)</div>`;
-    
+    box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">INVENTORY</div>`;
     const items = ["Crowbar", "Tape", "Key", "Map", "Photo", "Lighter", "Note", "Radio", "Empty"];
     items.forEach((n, i) => {
         const s = document.createElement('div');
