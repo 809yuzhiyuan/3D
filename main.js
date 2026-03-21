@@ -1,8 +1,4 @@
 import * as THREE from 'three';
-// 引入后处理相关组件以实现发光效果
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
 // 1. 配置与常量 (Configuration & Constants)
@@ -40,21 +36,18 @@ const CONFIG = {
     spawnPosition: new THREE.Vector3(0, 6, -40),
     spawnYaw: Math.PI,
 
-    // ✅ 视觉优化配置
-    lineColorHouse: 0x00ffff, // 青色 (科幻感)
-    lineColorDoor: 0xffaa00,  // 橙色 (警示感)
-    lineOpacity: 0.8,
-    lineWidth: 2.5, // 注意：WebGL 原生线宽通常限制为 1，但在某些浏览器或通过后期发光可以模拟粗细
-    bloomStrength: 1.5, // 发光强度
-    bloomRadius: 0.4,   // 发光半径
-    bloomThreshold: 0.1 // 发光阈值
+    // ✅ 视觉优化配置 (原生兼容版)
+    lineColorHouse: 0x00ffff, // 青色
+    lineColorDoor: 0xffaa00,  // 橙色
+    bgColor: 0x050508,        // 深空灰黑
+    fogColor: 0x050508
 };
 
 // ==========================================
 // 2. 全局变量 (Global State)
 // ==========================================
 let camera, scene, renderer;
-let composer; // 后处理合成器
+// 移除了 composer，不再依赖后处理模块
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let isSprinting = false;
 let isCrouching = false;
@@ -105,9 +98,9 @@ animate();
 function init() {
     // 1. 创建场景
     scene = new THREE.Scene();
-    // ✅ 优化：更深的背景色，配合雾气营造深邃感
-    scene.background = new THREE.Color(0x050508); 
-    scene.fog = new THREE.FogExp2(0x050508, 0.0015); // 增加雾浓度
+    scene.background = new THREE.Color(CONFIG.bgColor);
+    // 增加雾效浓度，营造深邃感，掩盖远处的线条截断
+    scene.fog = new THREE.FogExp2(CONFIG.fogColor, 0.0025); 
 
     // 2. 创建相机
     camera = new THREE.PerspectiveCamera(CONFIG.fov * 180 / Math.PI, CONFIG.windowWidth / CONFIG.windowHeight, CONFIG.nearClip, CONFIG.gridRadius);
@@ -115,18 +108,16 @@ function init() {
     resetPlayer();
 
     // 3. 创建渲染器
-    renderer = new THREE.WebGLRenderer({ antialias: false }); // 关闭自带抗锯齿，由后处理接管
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制最大像素比以优化性能
+    renderer = new THREE.WebGLRenderer({ antialias: true }); // 开启原生抗锯齿
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(CONFIG.windowWidth, CONFIG.windowHeight);
+    // 开启色调映射，让亮色更自然
     renderer.toneMapping = THREE.ReinhardToneMapping;
     document.body.appendChild(renderer.domElement);
 
-    // 4. 设置后处理 (Bloom 发光效果)
-    setupPostProcessing();
-
-    // 5. 创建场景物体
+    // 4. 创建场景物体
     createHouseLines();
-    createGrid(); // 替换原来的 GridHelper 为自定义优化版本
+    createGrid();
     createCrosshair();
     createUI();
 
@@ -146,22 +137,6 @@ function init() {
 
     document.addEventListener('pointerlockchange', onPointerLockChange, false);
     document.addEventListener('mozpointerlockchange', onPointerLockChange, false);
-}
-
-function setupPostProcessing() {
-    const renderScene = new RenderPass(scene, camera);
-
-    // UnrealBloomPass 参数: resolution, strength, radius, threshold
-    const bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(CONFIG.windowWidth, CONFIG.windowHeight),
-        CONFIG.bloomStrength,
-        CONFIG.bloomRadius,
-        CONFIG.bloomThreshold
-    );
-
-    composer = new EffectComposer(renderer);
-    composer.addPass(renderScene);
-    composer.addPass(bloomPass);
 }
 
 function onPointerLockChange() {
@@ -184,7 +159,7 @@ function resetPlayer() {
 }
 
 // ==========================================
-// 4. 场景构建 (Scene Building) - ✅ 视觉优化核心
+// 4. 场景构建 (Scene Building) - ✅ 原生发光技巧
 // ==========================================
 function createHouseLines() {
     houseLinesGroup = new THREE.Group();
@@ -212,19 +187,21 @@ function createHouseLines() {
         [0, 4], [1, 5], [2, 6], [3, 7]
     ];
 
-    // ✅ 优化：使用 LineBasicMaterial 并设置透明度和颜色
+    // ✅ 技巧：使用 AdditiveBlending (加法混合) 让线条在重叠处变亮，模拟发光
     const lineMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorHouse, 
         transparent: true, 
-        opacity: CONFIG.lineOpacity,
-        linewidth: 1 // WebGL 限制，主要靠 Bloom 显粗
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false // 防止线条互相遮挡导致的闪烁
     });
     
     const doorMaterial = new THREE.LineBasicMaterial({ 
         color: CONFIG.lineColorDoor, 
         transparent: true, 
-        opacity: 1.0, // 门框更亮
-        linewidth: 1 
+        opacity: 1.0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
     });
 
     edges.forEach(pair => {
@@ -254,15 +231,14 @@ function createHouseLines() {
 }
 
 function createGrid() {
-    // ✅ 优化：自定义网格，颜色更淡，不抢眼
     const size = CONFIG.gridRadius * 2;
     const divisions = CONFIG.gridRadius * 2 / CONFIG.gridStep;
     
-    // 使用 GridHelper，但颜色调暗
     gridHelper = new THREE.GridHelper(size, divisions, 0x444444, 0x222222);
     gridHelper.position.y = 0;
     gridHelper.material.transparent = true;
-    gridHelper.material.opacity = 0.3;
+    gridHelper.material.opacity = 0.4;
+    gridHelper.material.blending = THREE.AdditiveBlending;
     scene.add(gridHelper);
 }
 
@@ -272,9 +248,10 @@ function createCrosshair() {
     canvas.height = 32;
     const ctx = canvas.getContext('2d');
     
-    // ✅ 优化：准星也加一点发光色
+    // 绘制发光准星
     ctx.strokeStyle = '#00ffff'; 
     ctx.lineWidth = 2;
+    // Canvas 阴影模拟发光
     ctx.shadowBlur = 4;
     ctx.shadowColor = '#00ffff';
     
@@ -287,7 +264,8 @@ function createCrosshair() {
     const material = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        blending: THREE.AdditiveBlending // 叠加混合模式，更亮
+        blending: THREE.AdditiveBlending,
+        depthTest: false // 准星始终在最前
     });
     crosshair = new THREE.Sprite(material);
     crosshair.scale.set(0.5, 0.5, 1);
@@ -333,16 +311,15 @@ function updateUI() {
         btn.style.pointerEvents = 'auto';
         btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.2)';
         btn.style.transition = 'all 0.3s';
+        btn.style.textShadow = '0 0 5px rgba(0,255,255,0.5)';
         
         btn.onmouseenter = () => {
-            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.1)';
+            btn.style.backgroundColor = 'rgba(0, 255, 255, 0.15)';
             btn.style.boxShadow = '0 0 20px rgba(0, 255, 255, 0.6)';
-            btn.style.textShadow = '0 0 8px #00ffff';
         };
         btn.onmouseleave = () => {
             btn.style.backgroundColor = 'rgba(10, 10, 15, 0.8)';
             btn.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.2)';
-            btn.style.textShadow = 'none';
         };
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -352,7 +329,7 @@ function updateUI() {
     };
 
     if (currentState === GAME_STATE.MENU) {
-        uiContainer.style.backgroundColor = 'rgba(5, 5, 8, 0.85)';
+        uiContainer.style.backgroundColor = 'rgba(5, 5, 8, 0.9)';
         uiContainer.style.pointerEvents = 'auto';
         
         const title = document.createElement('h1');
@@ -364,7 +341,7 @@ function updateUI() {
         title.style.width = '100%';
         title.style.fontSize = '64px';
         title.style.margin = '0';
-        title.style.textShadow = '0 0 20px #00ffff, 0 0 40px #00aaaa';
+        title.style.textShadow = '0 0 20px #00ffff';
         title.style.letterSpacing = '5px';
         uiContainer.appendChild(title);
 
@@ -631,11 +608,6 @@ function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    
-    // 更新后处理分辨率
-    if (composer) {
-        composer.setSize(window.innerWidth, window.innerHeight);
-    }
 }
 
 // ==========================================
@@ -736,7 +708,6 @@ function updatePhysics(delta) {
 // ==========================================
 function updateGrid() {
     if (gridHelper && camera) {
-        // 让网格跟随玩家移动，制造无限地面的错觉
         gridHelper.position.x = Math.floor(camera.position.x / CONFIG.gridStep) * CONFIG.gridStep;
         gridHelper.position.z = Math.floor(camera.position.z / CONFIG.gridStep) * CONFIG.gridStep;
     }
@@ -760,11 +731,7 @@ function animate() {
     updateGrid();
     
     if (renderer && scene && camera) {
-        // ✅ 使用 composer 渲染而不是 renderer，以应用发光效果
-        if (composer) {
-            composer.render();
-        } else {
-            renderer.render(scene, camera);
-        }
+        // ✅ 直接使用 renderer.render，不再依赖 composer
+        renderer.render(scene, camera);
     }
 }
