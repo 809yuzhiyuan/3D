@@ -9,7 +9,7 @@ const CONFIG = {
     far: 2000,
     bgColor: 0x050505,
     fogColor: 0x050505,
-    fogDensity: 0.0015, // 雾更浓一点，遮挡远处未加载的房子
+    fogDensity: 0.0015,
 
     // 玩家
     heightStand: 1.7,
@@ -20,14 +20,14 @@ const CONFIG = {
     speedCrouch: 2.0,
     jumpForce: 12.0,
     gravity: 40.0,
-    sensitivity: 0.002, // 鼠标灵敏度
+    sensitivity: 0.002, 
 
     // 房子
     count: 200,
-    gridCols: 20, // 20列
-    gridRows: 10, // 10行 (20*10=200)
-    spacing: 150, // 房子间距
-    w: 100, h: 90, d: 80, // 3层楼尺寸
+    gridCols: 20,
+    gridRows: 10,
+    spacing: 150,
+    w: 100, h: 90, d: 80,
     floorH: 30,
     doorW: 20, doorH: 24,
 
@@ -42,11 +42,10 @@ const CONFIG = {
 // 2. 全局变量
 // ==========================================
 let camera, scene, renderer;
-let linesGroup, groundGrid;
+let linesGroup;
 let crosshair;
 let uiContainer;
 
-// 玩家状态
 const player = {
     pos: new THREE.Vector3(0, 2, 0),
     vel: new THREE.Vector3(0, 0, 0),
@@ -56,20 +55,18 @@ const player = {
     crouching: false
 };
 
-// 输入状态 (修复核心)
+// 输入状态
 const keys = {
     w: false, a: false, s: false, d: false,
     space: false, shift: false, ctrl: false
 };
-let keyLocks = { e: false }; // 防抖锁
+let keyLocks = { e: false };
 
-// 游戏状态
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
 let currentState = STATE.MENU;
 let isLocked = false;
 
-// 世界数据
-const houses = []; // 存储所有房子的位置和包围盒
+const houses = [];
 let renderList = [];
 
 // ==========================================
@@ -96,7 +93,6 @@ function init() {
     createCrosshair();
     createUI();
 
-    // ✅ 修复：标准事件监听
     window.addEventListener('resize', onResize);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
@@ -110,28 +106,22 @@ function init() {
 
     document.addEventListener('pointerlockchange', () => {
         isLocked = (document.pointerLockElement === renderer.domElement);
-        if (!isLocked && currentState === STATE.PLAYING) {
-            // 如果意外丢失锁定，暂停游戏
-            // currentState = STATE.PAUSED; 
-            // updateUI();
-        }
     });
 }
 
 // ==========================================
-// 4. 世界构建 (200座房子)
+// 4. 世界构建
 // ==========================================
 function createWorld() {
     linesGroup = new THREE.Group();
     scene.add(linesGroup);
 
-    // 1. 生成地面网格 (无限延伸感)
+    // 地面
     const gridSize = 10000;
     const gridDivs = 400;
     const geoGrid = new THREE.GridHelper(gridSize, gridDivs, CONFIG.cGrid, CONFIG.cGrid);
     geoGrid.position.y = 0;
     
-    // 双层地面渲染 (发光效果)
     const matGlow = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending });
     const matBright = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false });
     
@@ -142,13 +132,14 @@ function createWorld() {
     scene.add(gridGlow, gridBright);
     renderList.push(gridGlow, gridBright);
 
-    // 2. 生成 200 座房子
+    // 200座房子
     const cols = CONFIG.gridCols;
     const rows = CONFIG.gridRows;
     const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
     const startZ = -((rows * CONFIG.spacing) / 2) + CONFIG.spacing/2;
 
-    const houseGeoCache = createHouseGeometry(); // 预创建几何体以优化性能
+    const houseGeoCache = createHouseGeometry();
+    const doorGeoCache = createDoorGeometry();
 
     for (let i = 0; i < CONFIG.count; i++) {
         const col = i % cols;
@@ -157,30 +148,28 @@ function createWorld() {
         const x = startX + col * CONFIG.spacing;
         const z = startZ + row * CONFIG.spacing;
         
-        // 跳过出生点附近的房子，防止出生卡住
-        if (Math.abs(x) < 50 && Math.abs(z) < 50) continue;
+        // 留出出生点空地
+        if (Math.abs(x) < 60 && Math.abs(z) < 60) continue;
 
         const house = {
             x, z,
             minX: x - CONFIG.w/2, maxX: x + CONFIG.w/2,
             minZ: z - CONFIG.d/2, maxZ: z + CONFIG.d/2,
-            mesh: null
+            mesh: null, doorMesh: null
         };
 
-        // 实例化房子线条
         const mesh = new THREE.LineSegments(houseGeoCache, new THREE.LineBasicMaterial({ 
             color: CONFIG.cWall, transparent: true, opacity: 1, depthWrite: false, toneMapped: false 
         }));
-        mesh.position.set(x, CONFIG.h/2, z); // 中心点提升
-        mesh.visible = false; // 初始隐藏，按需显示
+        mesh.position.set(x, CONFIG.h/2, z);
+        mesh.visible = false;
         linesGroup.add(mesh);
         house.mesh = mesh;
-        
-        // 单独处理门框颜色 (需要额外几何体或修改顶点颜色，这里简化为整体白色，门框用红色小线段补充)
-        // 为了性能，200座房子只画白框，门框在近距离时动态添加或忽略，这里我们给每个房子加一个红色的门框几何体
-        const doorGeo = createDoorGeometry();
-        const doorMesh = new THREE.LineSegments(doorGeo, new THREE.LineBasicMaterial({ color: CONFIG.cDoor, depthWrite: false, toneMapped: false }));
-        doorMesh.position.set(x, 0, z); // 门框基于底部
+
+        const doorMesh = new THREE.LineSegments(doorGeoCache, new THREE.LineBasicMaterial({ 
+            color: CONFIG.cDoor, depthWrite: false, toneMapped: false 
+        }));
+        doorMesh.position.set(x, 0, z);
         doorMesh.visible = false;
         linesGroup.add(doorMesh);
         house.doorMesh = doorMesh;
@@ -189,15 +178,10 @@ function createWorld() {
     }
 }
 
-// 预创建房子几何体 (相对坐标)
 function createHouseGeometry() {
     const hw = CONFIG.w/2, hd = CONFIG.d/2, hh = CONFIG.h/2;
     const points = [];
-    
-    // 辅助函数
-    const addLine = (x1,y1,z1, x2,y2,z2) => {
-        points.push(x1,y1,z1, x2,y2,z2);
-    };
+    const addLine = (x1,y1,z1, x2,y2,z2) => points.push(x1,y1,z1, x2,y2,z2);
 
     // 楼层轮廓
     for(let i=0; i<=CONFIG.h; i+=CONFIG.floorH) {
@@ -210,18 +194,16 @@ function createHouseGeometry() {
     
     // 柱子
     const corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
-    corners.forEach(([cx, cz]) => {
-        addLine(cx, -hh, cz, cx, hh, cz);
-    });
+    corners.forEach(([cx, cz]) => addLine(cx, -hh, cz, cx, hh, cz));
 
-    // 楼板网格 (简化)
+    // 楼板网格
     for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
         const y = i - hh;
         for(let k=-hw; k<=hw; k+=20) addLine(k, y, -hd, k, y, hd);
         for(let k=-hd; k<=hd; k+=20) addLine(-hw, y, k, hw, y, k);
     }
 
-    // 楼梯 (左侧 Z字形)
+    // 楼梯
     const sx = -hw + 10, sz = hd - 5;
     let cx = sx, cz = sz, cy = -hh;
     let dir = -1;
@@ -233,12 +215,10 @@ function createHouseGeometry() {
         for(let s=0; s<steps; s++) {
             const ny = cy + stepH;
             const nz = cz + stepD*dir;
-            // 台阶线
             points.push(cx-6, ny, nz, cx+6, ny, nz);
             points.push(cx, cy, nz, cx, ny, nz);
             cy = ny; cz = nz;
         }
-        // 平台
         const pz = cz + 5*dir;
         addLine(cx-6, cy, cz, cx+6, cy, cz);
         addLine(cx-6, cy, pz, cx+6, cy, pz);
@@ -257,7 +237,6 @@ function createDoorGeometry() {
     const dw = CONFIG.doorW/2;
     const dh = CONFIG.doorH;
     const points = [];
-    // 前墙 Z = hd
     points.push(-dw, 0, hd, -dw, dh, hd);
     points.push(-dw, dh, hd, dw, dh, hd);
     points.push(dw, dh, hd, dw, 0, hd);
@@ -283,7 +262,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 5. 物理与碰撞 (支持多房子)
+// 5. 物理与碰撞 (✅ 修复移动方向)
 // ==========================================
 function updatePhysics() {
     const dt = 0.016;
@@ -300,17 +279,22 @@ function updatePhysics() {
 
     const spd = player.crouching ? CONFIG.speedCrouch : (keys.shift ? CONFIG.speedRun : CONFIG.speedWalk);
 
-    // 方向
+    // 计算方向向量
     const sinY = Math.sin(player.yaw);
     const cosY = Math.cos(player.yaw);
-    const fwd = new THREE.Vector3(-sinY, 0, -cosY);
+    
+    // 前方向量 (Z轴负方向是Three.js的默认前方，但这里我们根据yaw旋转)
+    // 当yaw=0时，fwd应该是 (0, 0, -1) 即向屏幕内
+    const fwd = new THREE.Vector3(-sinY, 0, -cosY); 
     const right = new THREE.Vector3(-cosY, 0, sinY);
     
     const move = new THREE.Vector3(0,0,0);
-    if (keys.w) move.sub(fwd);
-    if (keys.s) move.add(fwd);
-    if (keys.a) move.add(right);
-    if (keys.d) move.sub(right);
+
+    // ✅ 核心修复：修正 WASD 逻辑
+    if (keys.w) move.add(fwd);       // W = 向前 (加前方向量)
+    if (keys.s) move.sub(fwd);       // S = 向后 (减前方向量)
+    if (keys.a) move.sub(right);     // A = 向左 (减右方向量 = 左)
+    if (keys.d) move.add(right);     // D = 向右 (加右方向量)
 
     const len = move.length();
     if (len > 0) {
@@ -335,37 +319,30 @@ function updatePhysics() {
 
     checkGroundAndStairs();
     
-    // 更新相机
     camera.position.copy(player.pos);
 }
 
 function checkCollision(pos) {
     const r = CONFIG.radius;
-    const hStand = player.crouching ? CONFIG.heightCrouch : CONFIG.heightStand;
     
-    // 快速剔除：只检测附近的房子
     for (const h of houses) {
-        // 简单的距离检查
         if (Math.abs(pos.x - h.x) > CONFIG.w/2 + r + 10 || Math.abs(pos.z - h.z) > CONFIG.d/2 + r + 10) continue;
 
-        // 房子边界
         const minX = h.minX, maxX = h.maxX;
         const minZ = h.minZ, maxZ = h.maxZ;
         const minY = 0, maxY = CONFIG.h;
 
         if (pos.y < minY || pos.y > maxY) continue;
 
-        // 门洞 (仅底层前墙)
         const frontZ = maxZ;
         const dw = CONFIG.doorW/2;
         const dh = CONFIG.doorH;
         
         if (Math.abs(pos.z - frontZ) < r) {
-            if (pos.y < dh && pos.x > h.x - dw - r && pos.x < h.x + dw + r) continue; // 门
-            if (pos.x >= minX - r && pos.x <= maxX + r) return true; // 墙
+            if (pos.y < dh && pos.x > h.x - dw - r && pos.x < h.x + dw + r) continue;
+            if (pos.x >= minX - r && pos.x <= maxX + r) return true;
         }
 
-        // 其他墙
         const inX = pos.x > minX - r && pos.x < maxX + r;
         const inZ = pos.z > minZ - r && pos.z < maxZ + r;
         if (inX && inZ) {
@@ -377,26 +354,17 @@ function checkCollision(pos) {
 }
 
 function checkGroundAndStairs() {
-    let supportY = 0; // 默认地面
-    let onSomething = true;
-
-    // 简单楼梯逻辑 (复用之前的逻辑，遍历附近房子)
-    const r = CONFIG.radius;
+    let supportY = 0;
+    
     for (const h of houses) {
         if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 5 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 5) continue;
         
-        // 检查是否在房子范围内
         if (player.pos.x > h.minX && player.pos.x < h.maxX && player.pos.z > h.minZ && player.pos.z < h.maxZ) {
-            // 楼梯高度计算 (简化版)
             const stairH = getStairHeight(player.pos.x, player.pos.z, h.x, h.z);
-            if (stairH !== null && stairH > supportY) {
-                supportY = stairH;
-            }
+            if (stairH !== null && stairH > supportY) supportY = stairH;
             
-            // 楼层板
             for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
                 if (player.pos.y > i - 1 && player.pos.y < i + 2) {
-                    // 排除楼梯口 (简化：全铺)
                     if (i > supportY) supportY = i;
                 }
             }
@@ -416,37 +384,31 @@ function checkGroundAndStairs() {
 }
 
 function getStairHeight(x, z, hx, hz) {
-    // 简化楼梯碰撞，仅做演示
     const hw = CONFIG.w/2, hd = CONFIG.d/2;
     const sx = hx - hw + 10;
     const szStart = hz + hd - 5;
     if (x < sx - 7 || x > sx + 7) return null;
     
-    // 简单线性斜坡模拟
     const distZ = szStart - z;
-    if (distZ > 0 && distZ < 80) { // 假设楼梯总长80
+    if (distZ > 0 && distZ < 80) {
         return (distZ / 80) * CONFIG.h;
     }
     return null;
 }
 
 // ==========================================
-// 6. 渲染管理 (动态显示200座房子)
+// 6. 渲染管理
 // ==========================================
 function updateVisibility() {
-    const renderDist = 400; // 渲染距离
-    
+    const renderDist = 400;
     houses.forEach(h => {
         const dist = Math.sqrt((player.pos.x - h.x)**2 + (player.pos.z - h.z)**2);
         const visible = dist < renderDist;
-        
         if (h.mesh.visible !== visible) {
             h.mesh.visible = visible;
             h.doorMesh.visible = visible;
         }
-        
         if (visible) {
-            // 雾效
             const alpha = Math.max(0.1, 1.0 - dist/renderDist);
             h.mesh.material.opacity = alpha;
             h.doorMesh.material.opacity = alpha;
@@ -459,12 +421,10 @@ function animate() {
     
     if (currentState === STATE.PLAYING) {
         updatePhysics();
-        // 视角旋转
         const euler = new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ');
         camera.quaternion.setFromEuler(euler);
     }
     
-    // 准星
     if (crosshair) {
         crosshair.position.copy(camera.position);
         const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
@@ -476,29 +436,23 @@ function animate() {
 }
 
 // ==========================================
-// 7. 输入处理 (彻底修复)
+// 7. 输入处理
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
-    
-    // 移动
     if (code === 'KeyW') keys.w = true;
     if (code === 'KeyS') keys.s = true;
     if (code === 'KeyA') keys.a = true;
     if (code === 'KeyD') keys.d = true;
-    
-    // 动作
     if (code === 'Space') keys.space = true;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = true;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = true;
     
-    // 功能键 (带防抖)
     if (code === 'KeyE' && !keyLocks.e) {
         if (currentState === STATE.PLAYING) toggleInventory();
         keyLocks.e = true;
     }
     
-    // 菜单
     if (code === 'Escape') {
         if (currentState === STATE.INV) toggleInventory();
         else if (currentState === STATE.PLAYING) {
@@ -527,12 +481,9 @@ function onKeyUp(e) {
 function onMouseMove(e) {
     if (currentState !== STATE.PLAYING || !isLocked) return;
     
-    // ✅ 修复：视角反向问题
-    // movementX > 0 (鼠标右移) -> yaw 增加 -> 视角右转
+    // ✅ 视角左右修复：确保符号正确
     player.yaw += e.movementX * CONFIG.sensitivity;
     player.pitch -= e.movementY * CONFIG.sensitivity;
-    
-    // 限制垂直视角
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
 }
 
@@ -559,14 +510,25 @@ function updateUI() {
     uiContainer.innerHTML = '';
     uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
 
-    // 调试信息
     if (currentState === STATE.PLAYING || currentState === STATE.INV) {
+        // 确定当前移动方向用于调试显示
+        let dirStr = "STOP";
+        if (keys.w) dirStr = "FWD ↑";
+        if (keys.s) dirStr = "BACK ↓";
+        if (keys.a) dirStr = "LEFT ←";
+        if (keys.d) dirStr = "RIGHT →";
+        if (keys.w && keys.d) dirStr = "FWD-RIGHT ↗";
+        if (keys.w && keys.a) dirStr = "FWD-LEFT ↖";
+        if (keys.s && keys.d) dirStr = "BACK-RIGHT ↘";
+        if (keys.s && keys.a) dirStr = "BACK-LEFT ↙";
+
         const info = document.createElement('div');
         Object.assign(info.style, { position:'absolute', top:'10px', left:'10px', fontSize:'14px', color:'#0F0', textShadow:'1px 1px 0 #000' });
         const floor = Math.floor(player.pos.y / CONFIG.floorH) + 1;
         info.innerHTML = `
             POS: ${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
             FLOOR: ${floor}<br>
+            DIR: <strong>${dirStr}</strong><br>
             KEYS: W[${keys.w?'ON':'OFF'}] S[${keys.s?'ON':'OFF'}] A[${keys.a?'ON':'OFF'}] D[${keys.d?'ON':'OFF'}]<br>
             SHIFT[${keys.shift?'RUN':'WALK'}] CTRL[${keys.ctrl?'CROUCH':'STAND'}] SPACE[${keys.space?'JUMP':'--'}]<br>
             HOUSES: ${CONFIG.count} | FPS: 60
@@ -641,7 +603,7 @@ function drawInventory() {
 
 function startGame() {
     currentState = STATE.PLAYING;
-    player.pos.set(0, 2, 0); // 重置到中心空地
+    player.pos.set(0, 2, 0);
     player.vel.set(0,0,0);
     player.yaw = 0;
     updateUI();
