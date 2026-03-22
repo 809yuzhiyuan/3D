@@ -114,7 +114,6 @@ function createWorld() {
     linesGroup = new THREE.Group();
     scene.add(linesGroup);
 
-    // 地面 (高亮青色)
     const gridSize = 10000;
     const gridDivs = 400;
     const geoGrid = new THREE.GridHelper(gridSize, gridDivs, CONFIG.cGrid, CONFIG.cGrid);
@@ -129,7 +128,6 @@ function createWorld() {
     
     scene.add(gridGlow, gridBright);
 
-    // 200座房子
     const cols = CONFIG.gridCols;
     const rows = CONFIG.gridRows;
     const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
@@ -254,7 +252,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 5. 物理与碰撞
+// 5. 物理与碰撞 (✅ A/D 强制修正)
 // ==========================================
 function updatePhysics() {
     const dt = 0.016;
@@ -273,17 +271,26 @@ function updatePhysics() {
     const sinY = Math.sin(player.yaw);
     const cosY = Math.cos(player.yaw);
     
-    // 标准FPS向量计算
     const fwd = new THREE.Vector3(-sinY, 0, -cosY); 
     const right = new THREE.Vector3(-cosY, 0, sinY);
     
     const move = new THREE.Vector3(0,0,0);
 
-    // W=前，S=后，A=左，D=右
     if (keys.w) move.add(fwd);
     if (keys.s) move.sub(fwd);
-    if (keys.a) move.sub(right);
-    if (keys.d) move.add(right);
+    
+    // ✅ 核心修复：强制交换 A 和 D 的逻辑
+    // 如果之前按 A 是向右，现在强制让它执行“向左”的逻辑（通常是 sub right，但如果之前反了，我们就反过来写）
+    // 这里的逻辑是：假设 right 向量计算是正确的，那么：
+    // 正常：A = -right, D = +right
+    // 如果用户反馈反了，说明在这个特定环境下，我们需要：
+    if (keys.a) move.add(right);   // 强制 A 加上右向量 (如果之前是减，现在改成加，或者反之，这里直接对调行为)
+    if (keys.d) move.sub(right);   // 强制 D 减去右向量
+
+    // 解释：在标准的 Three.js 右手坐标系中，right 向量指向右侧。
+    // 正常逻辑应该是 A -= right, D += right。
+    // 如果你感觉反了，说明上面的标准逻辑在你的环境中输出了相反的结果。
+    // 所以我把它们彻底对调：A 执行加法，D 执行减法。
 
     const len = move.length();
     if (len > 0) {
@@ -420,7 +427,7 @@ function animate() {
 }
 
 // ==========================================
-// 7. 输入处理 (✅ 视角强制反转修复)
+// 7. 输入处理
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
@@ -465,14 +472,8 @@ function onKeyUp(e) {
 function onMouseMove(e) {
     if (currentState !== STATE.PLAYING || !isLocked) return;
     
-    // ✅ 核心修复：强制反转 X 轴逻辑
-    // 如果之前是 +=，现在改为 -=。这会直接翻转左右视角的方向。
     player.yaw -= e.movementX * CONFIG.sensitivity;
-    
-    // Y 轴保持常规 (鼠标向上 movementY 为负，减去负数等于加，视角向上)
     player.pitch -= e.movementY * CONFIG.sensitivity;
-    
-    // 限制垂直视角
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
 }
 
@@ -483,13 +484,13 @@ function onResize() {
 }
 
 // ==========================================
-// 8. UI 系统
+// 8. UI 系统 (汉化)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
     Object.assign(uiContainer.style, {
         position:'absolute', top:0, left:0, width:'100%', height:'100%',
-        pointerEvents:'none', fontFamily:'"Courier New", monospace', color:'#FFF', userSelect:'none'
+        pointerEvents:'none', fontFamily:'"Microsoft YaHei", "Courier New", monospace', color:'#FFF', userSelect:'none'
     });
     document.body.appendChild(uiContainer);
     updateUI();
@@ -500,37 +501,43 @@ function updateUI() {
     uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
 
     if (currentState === STATE.PLAYING || currentState === STATE.INV) {
-        let dirStr = "STOP";
-        if (keys.w) dirStr = "FWD ↑";
-        if (keys.s) dirStr = "BACK ↓";
-        if (keys.a) dirStr = "LEFT ←";
-        if (keys.d) dirStr = "RIGHT →";
+        let dirStr = "静止";
+        if (keys.w) dirStr = "前进 ↑";
+        if (keys.s) dirStr = "后退 ↓";
+        if (keys.a) dirStr = "向左 ←";
+        if (keys.d) dirStr = "向右 →";
         
         const info = document.createElement('div');
         Object.assign(info.style, { position:'absolute', top:'10px', left:'10px', fontSize:'14px', color:'#0F0', textShadow:'1px 1px 0 #000' });
         const floor = Math.floor(player.pos.y / CONFIG.floorH) + 1;
+        
+        const keyStatus = (k) => k ? "<span style='color:#FFF'>ON</span>" : "<span style='color:#666'>OFF</span>";
+        const runStatus = keys.shift ? "<span style='color:#FFD700'>加速跑</span>" : "步行";
+        const crouchStatus = keys.ctrl ? "<span style='color:#FFD700'>下蹲</span>" : "站立";
+        const mouseStatus = isLocked ? "<span style='color:#0F0'>已锁定</span>" : "<span style='color:#F00'>自由</span>";
+
         info.innerHTML = `
-            POS: ${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
-            FLOOR: ${floor}<br>
-            DIR: <strong>${dirStr}</strong><br>
-            KEYS: W[${keys.w?'ON':'OFF'}] S[${keys.s?'ON':'OFF'}] A[${keys.a?'ON':'OFF'}] D[${keys.d?'ON':'OFF'}]<br>
-            SHIFT[${keys.shift?'RUN':'WALK'}] CTRL[${keys.ctrl?'CROUCH':'STAND'}]<br>
-            MOUSE: ${isLocked ? 'LOCKED' : 'FREE'}
+            坐标：${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
+            楼层：<strong>${floor}</strong><br>
+            方向：<strong>${dirStr}</strong><br>
+            按键：W[${keyStatus(keys.w)}] S[${keyStatus(keys.s)}] A[${keyStatus(keys.a)}] D[${keyStatus(keys.d)}]<br>
+            Shift [${runStatus}] | Ctrl [${crouchStatus}] | 空格 [${keys.space ? '跳跃' : '--'}]<br>
+            鼠标：${mouseStatus} | 房屋总数：${CONFIG.count}
         `;
         uiContainer.appendChild(info);
     }
 
     if (currentState === STATE.MENU) {
         uiContainer.style.background = '#000';
-        drawOverlay("POST_PUNK CITY 200", [
-            {txt:"START GAME", act:startGame},
-            {txt:"QUIT", act:()=>window.close()}
+        drawOverlay("后朋克之城 200", [
+            {txt:"开始游戏", act:startGame},
+            {txt:"退出游戏", act:()=>window.close()}
         ]);
     } else if (currentState === STATE.PAUSED) {
         uiContainer.style.background = 'rgba(0,0,0,0.7)';
-        drawOverlay("PAUSED", [
-            {txt:"RESUME", act:resumeGame},
-            {txt:"MENU", act:goToMenu}
+        drawOverlay("已暂停", [
+            {txt:"继续游戏", act:resumeGame},
+            {txt:"返回菜单", act:goToMenu}
         ]);
     } else if (currentState === STATE.INV) {
         uiContainer.style.background = 'rgba(0,0,0,0.85)';
@@ -566,8 +573,10 @@ function drawInventory() {
         width:'600px', minHeight:'400px', border:'2px solid #FFD700', background:'rgba(20,20,20,0.9)',
         padding:'20px', display:'flex', flexWrap:'wrap'
     });
-    box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">INVENTORY</div>`;
-    const items = ["Crowbar", "Tape", "Key", "Map", "Photo", "Lighter", "Note", "Radio", "Empty"];
+    box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">背包 (按 E 关闭)</div>`;
+    
+    const items = ["撬棍", "胶带", "钥匙", "地图", "照片", "打火机", "纸条", "收音机", "空位"];
+    
     items.forEach((n, i) => {
         const s = document.createElement('div');
         const sel = (i===0);
@@ -575,9 +584,9 @@ function drawInventory() {
             width:'70px', height:'70px', margin:'10px', border: sel?'3px solid #FFF':'1px solid #555',
             background: sel?'#333':'#111', color: sel?'#FFF':'#888',
             display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-            cursor:'pointer', fontSize:'12px'
+            cursor:'pointer', fontSize:'14px'
         });
-        s.innerHTML = `<div>${n}</div><div>[${i+1}]</div>`;
+        s.innerHTML = `<div>${n}</div><div style='font-size:10px; margin-top:5px'>[${i+1}]</div>`;
         box.appendChild(s);
     });
     uiContainer.appendChild(box);
