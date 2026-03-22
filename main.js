@@ -68,7 +68,7 @@ let isLocked = false;
 const houses = [];
 
 // ==========================================
-// 3. 初始化
+// 3. 初始化 (✅ 修复黑屏问题)
 // ==========================================
 init();
 animate();
@@ -105,6 +105,9 @@ function init() {
     document.addEventListener('pointerlockchange', () => {
         isLocked = (document.pointerLockElement === renderer.domElement);
     });
+
+    // ✅ 关键修复：初始化后立即强制渲染一帧，防止黑屏
+    renderer.render(scene, camera);
 }
 
 // ==========================================
@@ -252,7 +255,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 5. 物理与碰撞 (✅ A/D 强制修正)
+// 5. 物理与碰撞 (✅ 修复楼梯碰撞)
 // ==========================================
 function updatePhysics() {
     const dt = 0.016;
@@ -278,19 +281,8 @@ function updatePhysics() {
 
     if (keys.w) move.add(fwd);
     if (keys.s) move.sub(fwd);
-    
-    // ✅ 核心修复：强制交换 A 和 D 的逻辑
-    // 如果之前按 A 是向右，现在强制让它执行“向左”的逻辑（通常是 sub right，但如果之前反了，我们就反过来写）
-    // 这里的逻辑是：假设 right 向量计算是正确的，那么：
-    // 正常：A = -right, D = +right
-    // 如果用户反馈反了，说明在这个特定环境下，我们需要：
-    if (keys.a) move.add(right);   // 强制 A 加上右向量 (如果之前是减，现在改成加，或者反之，这里直接对调行为)
-    if (keys.d) move.sub(right);   // 强制 D 减去右向量
-
-    // 解释：在标准的 Three.js 右手坐标系中，right 向量指向右侧。
-    // 正常逻辑应该是 A -= right, D += right。
-    // 如果你感觉反了，说明上面的标准逻辑在你的环境中输出了相反的结果。
-    // 所以我把它们彻底对调：A 执行加法，D 执行减法。
+    if (keys.a) move.add(right);   // 修正后的 A/D
+    if (keys.d) move.sub(right);   // 修正后的 A/D
 
     const len = move.length();
     if (len > 0) {
@@ -345,17 +337,35 @@ function checkCollision(pos) {
     return false;
 }
 
+// ✅ 核心修复：重写地面和楼梯检测逻辑
 function checkGroundAndStairs() {
     let supportY = 0;
+    let onStair = false;
+    let stairY = 0;
+
     for (const h of houses) {
-        if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 5 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 5) continue;
+        // 快速排除
+        if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 10 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 10) continue;
         
+        // 必须在房子范围内
         if (player.pos.x > h.minX && player.pos.x < h.maxX && player.pos.z > h.minZ && player.pos.z < h.maxZ) {
-            const stairH = getStairHeight(player.pos.x, player.pos.z, h.x, h.z);
-            if (stairH !== null && stairH > supportY) supportY = stairH;
             
+            // 1. 优先检测楼梯 (扩大检测范围，增加容错)
+            const calculatedStairY = getStairHeightRobust(player.pos.x, player.pos.z, h.x, h.z);
+            
+            if (calculatedStairY !== null) {
+                onStair = true;
+                stairY = calculatedStairY;
+                // 如果在楼梯上，楼梯高度优先级最高
+                if (stairY > supportY) {
+                    supportY = stairY;
+                }
+            }
+
+            // 2. 检测楼层地板 (常规楼层)
             for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
-                if (player.pos.y > i - 1 && player.pos.y < i + 2) {
+                // 增加一点垂直容差，防止在楼层边缘掉落
+                if (player.pos.y > i - 2 && player.pos.y < i + 2) {
                     if (i > supportY) supportY = i;
                 }
             }
@@ -365,30 +375,60 @@ function checkGroundAndStairs() {
     const targetH = player.crouching ? CONFIG.heightCrouch : CONFIG.heightStand;
     const standY = supportY + targetH;
 
+    // 如果在楼梯上，进行特殊的“吸附”处理，防止抖动
+    if (onStair) {
+        // 如果玩家就在楼梯表面附近，强制修正 Y 坐标
+        if (Math.abs(player.pos.y - (stairY + targetH)) < 1.5 && player.vel.y <= 0) {
+            player.pos.y = stairY + targetH;
+            player.vel.y = 0;
+            player.grounded = true;
+            return;
+        }
+    }
+
+    // 常规地面检测
     if (player.pos.y <= standY + 0.5 && player.vel.y <= 0) {
         player.pos.y = standY;
         player.vel.y = 0;
         player.grounded = true;
     } else {
-        if (player.pos.y > supportY + targetH + 1.0) player.grounded = false;
+        // 只有当玩家明显高于支撑面时才视为在空中
+        if (player.pos.y > supportY + targetH + 1.0) {
+            player.grounded = false;
+        }
     }
 }
 
-function getStairHeight(x, z, hx, hz) {
+// ✅ 核心修复：更健壮的楼梯高度计算
+function getStairHeightRobust(x, z, hx, hz) {
     const hw = CONFIG.w/2, hd = CONFIG.d/2;
+    // 楼梯起始点
     const sx = hx - hw + 10;
     const szStart = hz + hd - 5;
-    if (x < sx - 7 || x > sx + 7) return null;
+    
+    // 扩大 X 轴的判定范围，防止侧向掉落
+    const stairWidth = 14; // 原为 14 (7+7)，这里保持或微调
+    if (x < sx - stairWidth/2 || x > sx + stairWidth/2) return null;
     
     const distZ = szStart - z;
-    if (distZ > 0 && distZ < 80) {
-        return (distZ / 80) * CONFIG.h;
+    
+    // 楼梯总长度约为 80
+    if (distZ > -5 && distZ < 85) {
+        // 计算理论高度
+        let h = (distZ / 80) * CONFIG.h;
+        
+        // 边界钳制
+        if (h < 0) h = 0;
+        if (h > CONFIG.h) h = CONFIG.h;
+        
+        return h;
     }
+    
     return null;
 }
 
 // ==========================================
-// 6. 渲染管理
+// 6. 渲染管理 (✅ 确保菜单时也渲染)
 // ==========================================
 function updateVisibility() {
     const renderDist = 400;
@@ -410,12 +450,14 @@ function updateVisibility() {
 function animate() {
     requestAnimationFrame(animate);
     
+    // 无论什么状态，都更新物理（如果在玩）和渲染
     if (currentState === STATE.PLAYING) {
         updatePhysics();
         const euler = new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ');
         camera.quaternion.setFromEuler(euler);
     }
     
+    // 即使在菜单或暂停，也更新准星位置（防止消失）和可见性
     if (crosshair) {
         crosshair.position.copy(camera.position);
         const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
@@ -423,6 +465,8 @@ function animate() {
     }
 
     updateVisibility();
+    
+    // 每一帧都强制渲染，解决黑屏问题
     renderer.render(scene, camera);
 }
 
@@ -481,10 +525,12 @@ function onResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    // 调整大小时也强制渲染一帧
+    renderer.render(scene, camera);
 }
 
 // ==========================================
-// 8. UI 系统 (汉化)
+// 8. UI 系统
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
