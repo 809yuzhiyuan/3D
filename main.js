@@ -1,15 +1,15 @@
 import * as THREE from 'three';
 
 // ==========================================
-// 1. 配置 (Configuration) - 逼真模式
+// 1. 配置 (Configuration) - 稳定模式
 // ==========================================
 const CONFIG = {
     fov: 75,
     near: 0.1,
-    far: 1000, // 缩短视距以增强雾气感
-    bgColor: 0x050510, // 深蓝色夜空
+    far: 800, 
+    bgColor: 0x050510,
     fogColor: 0x050510,
-    fogDensity: 0.015, // 更浓的雾
+    fogDensity: 0.02, 
 
     // 玩家
     heightStand: 1.7,
@@ -22,16 +22,15 @@ const CONFIG = {
     gravity: 30.0,
     sensitivity: 0.002, 
 
-    // 房子
-    count: 100, // 减少数量以保证光影性能
-    gridCols: 15,
-    gridRows: 8,
+    // 房子 (数量减少以保证性能)
+    count: 60, 
+    gridCols: 12,
+    gridRows: 6,
     spacing: 120,
     w: 80, h: 90, d: 60,
     floorH: 30,
     doorW: 20, doorH: 24,
     
-    // 材质颜色
     cWall: 0x888888,
     cDoor: 0xFF0055,
     cStair: 0xAA8844,
@@ -42,13 +41,11 @@ const CONFIG = {
 // 2. 全局变量
 // ==========================================
 let camera, scene, renderer;
-let worldGroup; // 包含所有建筑
+let worldGroup;
 let crosshair;
 let uiContainer;
 let clock = new THREE.Clock();
-
-// 纹理缓存
-const textures = {};
+let textures = {};
 
 const player = {
     pos: new THREE.Vector3(0, 2, 0),
@@ -66,164 +63,128 @@ const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
 let currentState = STATE.MENU;
 let isLocked = false;
 
-const houses = []; // 存储碰撞数据和网格引用
+const houses = [];
 
 // ==========================================
-// 3. 工具：程序化生成纹理 (关键步骤)
+// 3. 工具：极简纹理生成 (防止显存溢出)
 // ==========================================
-function createConcreteTexture() {
-    const size = 512;
+function createSimpleTexture(colorBase, noiseAmount) {
+    const size = 128; // 减小纹理尺寸
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
     
-    // 底色
-    ctx.fillStyle = '#444444';
+    ctx.fillStyle = colorBase;
     ctx.fillRect(0, 0, size, size);
     
-    // 噪点
-    for (let i = 0; i < 4000; i++) {
+    // 简单噪点
+    for (let i = 0; i < 200; i++) {
         const x = Math.random() * size;
         const y = Math.random() * size;
-        const gray = Math.floor(Math.random() * 60 + 20);
-        ctx.fillStyle = `rgb(${gray},${gray},${gray})`;
+        const alpha = Math.random() * 0.2;
+        ctx.fillStyle = `rgba(0,0,0,${alpha})`;
         ctx.fillRect(x, y, 2, 2);
     }
     
-    // 污渍/水痕
-    for (let i = 0; i < 50; i++) {
-        const x = Math.random() * size;
-        const y = Math.random() * size;
-        const r = Math.random() * 50 + 10;
-        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-        grad.addColorStop(0, 'rgba(0,0,0,0.2)');
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
+    tex.minFilter = THREE.LinearFilter; // 降低过滤等级以提高兼容性
     return tex;
 }
 
-function createMetalTexture() {
-    const size = 256;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    
-    ctx.fillStyle = '#554433';
-    ctx.fillRect(0, 0, size, size);
-    
-    // 划痕
-    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-    ctx.lineWidth = 1;
-    for(let i=0; i<100; i++) {
-        ctx.beginPath();
-        ctx.moveTo(Math.random()*size, Math.random()*size);
-        ctx.lineTo(Math.random()*size, Math.random()*size);
-        ctx.stroke();
-    }
-    
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    return tex;
-}
-
-function createGlowTexture(colorStr) {
-    const size = 64;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    
-    const grad = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
-    grad.addColorStop(0, colorStr);
-    grad.addColorStop(0.5, colorStr.replace(')', ', 0.5)').replace('rgb', 'rgba'));
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
-    
-    const tex = new THREE.CanvasTexture(canvas);
-    return tex;
-}
-
-// 初始化纹理
 function initTextures() {
-    textures.wall = createConcreteTexture();
-    textures.stair = createMetalTexture();
-    textures.doorGlow = createGlowTexture('rgb(255, 0, 85)');
+    try {
+        textures.wall = createSimpleTexture('#555555', 0.2);
+        textures.stair = createSimpleTexture('#665544', 0.3);
+    } catch (e) {
+        console.warn("纹理创建失败，使用纯色", e);
+        textures.wall = null;
+        textures.stair = null;
+    }
 }
 
 // ==========================================
-// 4. 初始化
+// 4. 初始化 (带错误处理)
 // ==========================================
 init();
 animate();
 
 function init() {
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(CONFIG.bgColor);
-    scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity);
+    try {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(CONFIG.bgColor);
+        scene.fog = new THREE.FogExp2(CONFIG.fogColor, CONFIG.fogDensity);
 
-    camera = new THREE.PerspectiveCamera(CONFIG.fov, window.innerWidth / window.innerHeight, CONFIG.near, CONFIG.far);
-    camera.position.copy(player.pos);
+        camera = new THREE.PerspectiveCamera(CONFIG.fov, window.innerWidth / window.innerHeight, CONFIG.near, CONFIG.far);
+        camera.position.copy(player.pos);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true; // 开启阴影
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping; // 电影级色调映射
-    renderer.toneMappingExposure = 0.8;
-    document.body.appendChild(renderer.domElement);
-
-    initTextures();
-    createLights();
-    createWorld();
-    createCrosshair();
-    createUI();
-
-    window.addEventListener('resize', onResize);
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('keyup', onKeyUp);
-    document.addEventListener('mousemove', onMouseMove);
-    
-    renderer.domElement.addEventListener('click', () => {
-        if (currentState === STATE.PLAYING && !isLocked) {
-            renderer.domElement.requestPointerLock();
+        renderer = new THREE.WebGLRenderer({ 
+            antialias: true, 
+            powerPreference: "high-performance",
+            preserveDrawingBuffer: true // 防止上下文丢失
+        });
+        
+        // 检查 WebGL 支持
+        if (!renderer.capabilities.isWebGL2) {
+            console.warn("当前浏览器不支持 WebGL 2，尝试降级...");
         }
-    });
 
-    document.addEventListener('pointerlockchange', () => {
-        isLocked = (document.pointerLockElement === renderer.domElement);
-    });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        
+        // 降低阴影质量以保稳定
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.BasicShadowMap; 
+        renderer.toneMapping = THREE.NoToneMapping; // 关闭色调映射以防兼容性问题
+        
+        document.body.appendChild(renderer.domElement);
 
-    renderer.render(scene, camera);
+        initTextures();
+        createLights();
+        createWorld();
+        createCrosshair();
+        createUI();
+
+        window.addEventListener('resize', onResize);
+        document.addEventListener('keydown', onKeyDown);
+        document.addEventListener('keyup', onKeyUp);
+        document.addEventListener('mousemove', onMouseMove);
+        
+        // 只有点击菜单按钮时才请求锁定
+        document.addEventListener('click', () => {
+            if (currentState === STATE.PLAYING && !isLocked) {
+                renderer.domElement.requestPointerLock().catch(err => {
+                    console.log("指针锁定被拒绝:", err);
+                });
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isLocked = (document.pointerLockElement === renderer.domElement);
+        });
+
+        renderer.render(scene, camera);
+    } catch (error) {
+        console.error("初始化失败:", error);
+        alert("图形初始化失败！请尝试更新显卡驱动或使用 Chrome/Edge 浏览器。\n错误信息：" + error.message);
+    }
 }
 
 // ==========================================
-// 5. 光照系统
+// 5. 光照系统 (简化版)
 // ==========================================
 function createLights() {
-    // 环境光 (微弱的蓝色月光)
-    const ambientLight = new THREE.AmbientLight(0x404060, 0.3);
+    const ambientLight = new THREE.AmbientLight(0x404060, 0.5);
     scene.add(ambientLight);
 
-    // 全局方向光 (模拟月亮/路灯总源)
-    const dirLight = new THREE.DirectionalLight(0xaaccff, 0.5);
+    const dirLight = new THREE.DirectionalLight(0xaaccff, 0.4);
     dirLight.position.set(100, 200, 100);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
+    // 降低阴影贴图大小
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 0.5;
     dirLight.shadow.camera.far = 500;
     dirLight.shadow.camera.left = -200;
@@ -234,19 +195,15 @@ function createLights() {
 }
 
 // ==========================================
-// 6. 世界构建 (实体化)
+// 6. 世界构建
 // ==========================================
 function createWorld() {
     worldGroup = new THREE.Group();
     scene.add(worldGroup);
 
-    // 地面 (带反射感的实体)
+    // 地面
     const groundGeo = new THREE.PlaneGeometry(20000, 20000);
-    const groundMat = new THREE.MeshStandardMaterial({ 
-        color: CONFIG.cGround, 
-        roughness: 0.8, 
-        metalness: 0.2 
-    });
+    const groundMat = new THREE.MeshStandardMaterial({ color: CONFIG.cGround, roughness: 0.9 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -257,29 +214,21 @@ function createWorld() {
     const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
     const startZ = -((rows * CONFIG.spacing) / 2) + CONFIG.spacing/2;
 
-    // 复用几何体以提高性能
     const wallGeo = new THREE.BoxGeometry(CONFIG.w, CONFIG.h, CONFIG.d);
-    // 调整UV以适配纹理重复
-    // 注意：BoxGeometry的UV默认是每面独立，这里我们简单处理，实际项目中可能需要自定义UV
-    
-    const doorGeo = createDoorMeshGeometry();
+    const doorGeo = new THREE.BoxGeometry(CONFIG.doorW, CONFIG.doorH, 2);
 
-    // 材质
     const wallMat = new THREE.MeshStandardMaterial({ 
         map: textures.wall,
         color: 0xffffff,
-        roughness: 0.9,
-        metalness: 0.1
+        roughness: 0.9
     });
-    textures.wall.repeat.set(4, 4); // 墙面纹理重复
+    if(textures.wall) textures.wall.repeat.set(2, 2);
 
     const stairMat = new THREE.MeshStandardMaterial({
         map: textures.stair,
         color: 0xffffff,
-        roughness: 0.6,
-        metalness: 0.8,
-        emissive: 0x221100,
-        emissiveIntensity: 0.2
+        roughness: 0.7,
+        metalness: 0.5
     });
 
     for (let i = 0; i < CONFIG.count; i++) {
@@ -298,7 +247,7 @@ function createWorld() {
             mesh: null, doorMesh: null, light: null
         };
 
-        // 1. 主体建筑
+        // 建筑主体
         const mesh = new THREE.Mesh(wallGeo, wallMat);
         mesh.position.set(x, CONFIG.h/2, z);
         mesh.castShadow = true;
@@ -306,38 +255,25 @@ function createWorld() {
         worldGroup.add(mesh);
         house.mesh = mesh;
 
-        // 2. 门 (发光体)
-        const doorMesh = new THREE.Mesh(doorGeo, new THREE.MeshStandardMaterial({
-            color: 0x000000,
-            emissive: CONFIG.cDoor,
-            emissiveIntensity: 2,
-            toneMapped: false
+        // 门 (发光)
+        const doorMesh = new THREE.Mesh(doorGeo, new THREE.MeshBasicMaterial({
+            color: CONFIG.cDoor
         }));
-        doorMesh.position.set(x, CONFIG.doorH/2, z + CONFIG.d/2 + 0.5); // 稍微突出墙面
+        doorMesh.position.set(x, CONFIG.doorH/2, z + CONFIG.d/2 + 1);
         worldGroup.add(doorMesh);
         house.doorMesh = doorMesh;
 
-        // 3. 门上方的灯 (点光源)
-        const light = new THREE.PointLight(CONFIG.cDoor, 1, 60);
+        // 灯光 (简化)
+        const light = new THREE.PointLight(CONFIG.cDoor, 0.8, 50);
         light.position.set(x, CONFIG.doorH + 5, z + CONFIG.d/2 + 2);
-        light.castShadow = true;
-        light.shadow.bias = -0.0001;
         worldGroup.add(light);
         house.light = light;
 
-        // 4. 楼梯 (简化为斜坡实体)
+        // 楼梯
         createStairs(x, z, stairMat);
 
         houses.push(house);
     }
-}
-
-function createDoorMeshGeometry() {
-    const dw = CONFIG.doorW;
-    const dh = CONFIG.doorH;
-    const depth = 2;
-    const geo = new THREE.BoxGeometry(dw, dh, depth);
-    return geo;
 }
 
 function createStairs(hx, hz, material) {
@@ -359,8 +295,6 @@ function createStairs(hx, hz, material) {
         for(let s=0; s<steps; s++) {
             const stepGeo = new THREE.BoxGeometry(stepW, stepH, stepD);
             const step = new THREE.Mesh(stepGeo, material);
-            
-            // 计算中心位置
             const nextZ = cz + stepD*dir;
             const nextY = cy + stepH/2;
             
@@ -372,7 +306,6 @@ function createStairs(hx, hz, material) {
             cy += stepH;
             cz = nextZ;
         }
-        // 平台
         const pz = cz + 5*dir;
         const platGeo = new THREE.BoxGeometry(stepW, stepH, 10);
         const plat = new THREE.Mesh(platGeo, material);
@@ -383,36 +316,32 @@ function createStairs(hx, hz, material) {
         dir *= -1;
         cz = pz + 5*dir;
     }
-    
     worldGroup.add(stairGroup);
-    // 注意：楼梯没有加入碰撞检测数组 houses，需要在 checkCollision 中特殊处理或简化
-    // 为了代码简洁，本示例中楼梯主要作为视觉，碰撞逻辑仍沿用之前的数学计算（因为楼梯是连续的斜面，用离散方块做碰撞很复杂）
-    // 但视觉上已经是实体了。
 }
 
 function createCrosshair() {
     const cvs = document.createElement('canvas');
-    cvs.width=64; cvs.height=64;
+    cvs.width=32; cvs.height=32;
     const ctx = cvs.getContext('2d');
     ctx.strokeStyle='#FFF'; ctx.lineWidth=2;
     ctx.beginPath();
-    ctx.moveTo(32,16); ctx.lineTo(32,24);
-    ctx.moveTo(32,40); ctx.lineTo(32,48);
-    ctx.moveTo(16,32); ctx.lineTo(24,32);
-    ctx.moveTo(40,32); ctx.lineTo(48,32);
+    ctx.moveTo(16,8); ctx.lineTo(16,12);
+    ctx.moveTo(16,20); ctx.lineTo(16,24);
+    ctx.moveTo(8,16); ctx.lineTo(12,16);
+    ctx.moveTo(20,16); ctx.lineTo(24,16);
     ctx.stroke();
     const tex = new THREE.CanvasTexture(cvs);
-    const mat = new THREE.SpriteMaterial({map:tex, depthTest:false, depthWrite:false, renderOrder:9999, toneMapped:false});
+    const mat = new THREE.SpriteMaterial({map:tex, depthTest:false, depthWrite:false, renderOrder:9999});
     crosshair = new THREE.Sprite(mat);
-    crosshair.scale.set(0.4,0.4,1);
+    crosshair.scale.set(0.3,0.3,1);
     scene.add(crosshair);
 }
 
 // ==========================================
-// 7. 物理与碰撞 (保持逻辑不变，适配新坐标)
+// 7. 物理与碰撞
 // ==========================================
 function updatePhysics() {
-    const dt = Math.min(clock.getDelta(), 0.1); // 限制最大dt防止穿模
+    const dt = Math.min(clock.getDelta(), 0.1);
 
     if (keys.ctrl && !player.crouching) {
         player.crouching = true;
@@ -424,13 +353,11 @@ function updatePhysics() {
     }
 
     const spd = player.crouching ? CONFIG.speedCrouch : (keys.shift ? CONFIG.speedRun : CONFIG.speedWalk);
-
     const sinY = Math.sin(player.yaw);
     const cosY = Math.cos(player.yaw);
     
     const fwd = new THREE.Vector3(-sinY, 0, -cosY); 
     const right = new THREE.Vector3(-cosY, 0, sinY);
-    
     const move = new THREE.Vector3(0,0,0);
 
     if (keys.w) move.add(fwd);
@@ -548,15 +475,10 @@ function updateVisibility() {
     houses.forEach(h => {
         const dist = Math.sqrt((player.pos.x - h.x)**2 + (player.pos.z - h.z)**2);
         const visible = dist < renderDist;
-        // 简单的可见性裁剪，优化性能
         if (h.mesh) h.mesh.visible = visible;
         if (h.doorMesh) h.doorMesh.visible = visible;
         if (h.light) h.light.visible = visible;
-        
-        if (visible) {
-            // 距离越远灯光越暗
-            if(h.light) h.light.intensity = Math.max(0.2, 1.0 - dist/renderDist);
-        }
+        if (visible && h.light) h.light.intensity = Math.max(0.2, 1.0 - dist/renderDist);
     });
 }
 
@@ -576,11 +498,17 @@ function animate() {
     }
 
     updateVisibility();
-    renderer.render(scene, camera);
+    
+    // 安全的渲染调用
+    try {
+        renderer.render(scene, camera);
+    } catch (e) {
+        console.error("渲染错误:", e);
+    }
 }
 
 // ==========================================
-// 9. 输入与 UI (保持汉化)
+// 9. 输入与 UI
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
@@ -632,7 +560,8 @@ function createUI() {
     uiContainer = document.createElement('div');
     Object.assign(uiContainer.style, {
         position:'absolute', top:0, left:0, width:'100%', height:'100%',
-        pointerEvents:'none', fontFamily:'"Microsoft YaHei", sans-serif', color:'#FFF', userSelect:'none'
+        pointerEvents:'none', fontFamily:'"Microsoft YaHei", sans-serif', color:'#FFF', userSelect:'none',
+        zIndex: 1000
     });
     document.body.appendChild(uiContainer);
     updateUI();
@@ -656,14 +585,14 @@ function updateUI() {
             坐标：${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
             楼层：<strong>${floor}</strong><br>
             方向：<strong>${dirStr}</strong><br>
-            渲染模式：<strong>逼真 PBR</strong>
+            状态：<strong>${isLocked ? '鼠标已锁定' : '点击画面锁定'}</strong>
         `;
         uiContainer.appendChild(info);
     }
 
     if (currentState === STATE.MENU) {
         uiContainer.style.background = '#000';
-        drawOverlay("后朋克之城 200 (逼真版)", [
+        drawOverlay("后朋克之城 200 (稳定版)", [
             {txt:"开始游戏", act:startGame},
             {txt:"退出", act:()=>window.close()}
         ]);
@@ -730,25 +659,35 @@ function startGame() {
     player.vel.set(0,0,0);
     player.yaw = 0;
     updateUI();
-    setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+    // 延迟请求锁定，确保 UI 已经隐藏
+    setTimeout(() => {
+        renderer.domElement.requestPointerLock().catch(e => console.log("锁定失败", e));
+    }, 100);
 }
+
 function resumeGame() {
     currentState = STATE.PLAYING;
     updateUI();
-    setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+    setTimeout(() => {
+        renderer.domElement.requestPointerLock().catch(e => console.log("锁定失败", e));
+    }, 100);
 }
+
 function goToMenu() {
     currentState = STATE.MENU;
     document.exitPointerLock();
     updateUI();
 }
+
 function toggleInventory() {
     if (currentState === STATE.PLAYING) {
         currentState = STATE.INV;
         document.exitPointerLock();
     } else if (currentState === STATE.INV) {
         currentState = STATE.PLAYING;
-        setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+        setTimeout(() => {
+            renderer.domElement.requestPointerLock().catch(e => console.log("锁定失败", e));
+        }, 100);
     }
     updateUI();
 }
