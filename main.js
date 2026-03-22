@@ -1,15 +1,15 @@
 import * as THREE from 'three';
 
 // ==========================================
-// 1. 配置 (Configuration) - 稳定模式
+// 1. 配置 (Configuration)
 // ==========================================
 const CONFIG = {
     fov: 75,
     near: 0.1,
     far: 800, 
-    bgColor: 0x050510,
+    bgColor: 0x050510, // 深蓝夜空
     fogColor: 0x050510,
-    fogDensity: 0.02, 
+    fogDensity: 0.015, 
 
     // 玩家
     heightStand: 1.7,
@@ -22,7 +22,7 @@ const CONFIG = {
     gravity: 30.0,
     sensitivity: 0.002, 
 
-    // 房子 (数量减少以保证性能)
+    // 房子
     count: 60, 
     gridCols: 12,
     gridRows: 6,
@@ -66,10 +66,10 @@ let isLocked = false;
 const houses = [];
 
 // ==========================================
-// 3. 工具：极简纹理生成 (防止显存溢出)
+// 3. 工具：纹理生成
 // ==========================================
-function createSimpleTexture(colorBase, noiseAmount) {
-    const size = 128; // 减小纹理尺寸
+function createSimpleTexture(colorBase) {
+    const size = 128;
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
@@ -78,35 +78,29 @@ function createSimpleTexture(colorBase, noiseAmount) {
     ctx.fillStyle = colorBase;
     ctx.fillRect(0, 0, size, size);
     
-    // 简单噪点
-    for (let i = 0; i < 200; i++) {
+    // 添加噪点增加质感
+    for (let i = 0; i < 300; i++) {
         const x = Math.random() * size;
         const y = Math.random() * size;
-        const alpha = Math.random() * 0.2;
-        ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+        const alpha = Math.random() * 0.15;
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
         ctx.fillRect(x, y, 2, 2);
     }
     
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.minFilter = THREE.LinearFilter; // 降低过滤等级以提高兼容性
+    tex.minFilter = THREE.LinearFilter;
     return tex;
 }
 
 function initTextures() {
-    try {
-        textures.wall = createSimpleTexture('#555555', 0.2);
-        textures.stair = createSimpleTexture('#665544', 0.3);
-    } catch (e) {
-        console.warn("纹理创建失败，使用纯色", e);
-        textures.wall = null;
-        textures.stair = null;
-    }
+    textures.wall = createSimpleTexture('#666666');
+    textures.stair = createSimpleTexture('#776655');
 }
 
 // ==========================================
-// 4. 初始化 (带错误处理)
+// 4. 初始化
 // ==========================================
 init();
 animate();
@@ -120,29 +114,21 @@ function init() {
         camera = new THREE.PerspectiveCamera(CONFIG.fov, window.innerWidth / window.innerHeight, CONFIG.near, CONFIG.far);
         camera.position.copy(player.pos);
 
-        renderer = new THREE.WebGLRenderer({ 
-            antialias: true, 
-            powerPreference: "high-performance",
-            preserveDrawingBuffer: true // 防止上下文丢失
-        });
-        
-        // 检查 WebGL 支持
-        if (!renderer.capabilities.isWebGL2) {
-            console.warn("当前浏览器不支持 WebGL 2，尝试降级...");
-        }
-
+        renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.setSize(window.innerWidth, window.innerHeight);
         
-        // 降低阴影质量以保稳定
+        // 开启阴影
         renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.BasicShadowMap; 
-        renderer.toneMapping = THREE.NoToneMapping; // 关闭色调映射以防兼容性问题
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        // 使用线性色调映射，比 Filmic 更亮更直观
+        renderer.toneMapping = THREE.LinearToneMapping;
+        renderer.toneMappingExposure = 1.2; 
         
         document.body.appendChild(renderer.domElement);
 
         initTextures();
-        createLights();
+        createLights(); // ✅ 重点修复在这里
         createWorld();
         createCrosshair();
         createUI();
@@ -152,12 +138,9 @@ function init() {
         document.addEventListener('keyup', onKeyUp);
         document.addEventListener('mousemove', onMouseMove);
         
-        // 只有点击菜单按钮时才请求锁定
         document.addEventListener('click', () => {
             if (currentState === STATE.PLAYING && !isLocked) {
-                renderer.domElement.requestPointerLock().catch(err => {
-                    console.log("指针锁定被拒绝:", err);
-                });
+                renderer.domElement.requestPointerLock().catch(err => console.log(err));
             }
         });
 
@@ -167,31 +150,39 @@ function init() {
 
         renderer.render(scene, camera);
     } catch (error) {
-        console.error("初始化失败:", error);
-        alert("图形初始化失败！请尝试更新显卡驱动或使用 Chrome/Edge 浏览器。\n错误信息：" + error.message);
+        console.error("Init Error:", error);
+        alert("初始化失败：" + error.message);
     }
 }
 
 // ==========================================
-// 5. 光照系统 (简化版)
+// 5. 光照系统 (✅ 核心修复：让场景亮起来)
 // ==========================================
 function createLights() {
-    const ambientLight = new THREE.AmbientLight(0x404060, 0.5);
+    // 1. 环境光：提供基础亮度，确保没有直射光的地方也是可见的
+    // 颜色：淡蓝色月光，强度：0.6 (之前可能太低了)
+    const ambientLight = new THREE.AmbientLight(0x404060, 0.6);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xaaccff, 0.4);
+    // 2. 方向光：模拟月亮或远处的大型路灯，照亮整个场景
+    const dirLight = new THREE.DirectionalLight(0xaaccff, 0.8); // 强度提高到 0.8
     dirLight.position.set(100, 200, 100);
     dirLight.castShadow = true;
-    // 降低阴影贴图大小
+    
+    // 优化阴影设置
     dirLight.shadow.mapSize.width = 1024;
     dirLight.shadow.mapSize.height = 1024;
     dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 500;
-    dirLight.shadow.camera.left = -200;
-    dirLight.shadow.camera.right = 200;
-    dirLight.shadow.camera.top = 200;
-    dirLight.shadow.camera.bottom = -200;
+    dirLight.shadow.camera.far = 600;
+    dirLight.shadow.camera.left = -300;
+    dirLight.shadow.camera.right = 300;
+    dirLight.shadow.camera.top = 300;
+    dirLight.shadow.camera.bottom = -300;
+    dirLight.shadow.bias = -0.0005; // 减少阴影伪影
+    
     scene.add(dirLight);
+
+    // 注意：每个房子门口的点光源会在 createWorld 中添加
 }
 
 // ==========================================
@@ -203,7 +194,11 @@ function createWorld() {
 
     // 地面
     const groundGeo = new THREE.PlaneGeometry(20000, 20000);
-    const groundMat = new THREE.MeshStandardMaterial({ color: CONFIG.cGround, roughness: 0.9 });
+    const groundMat = new THREE.MeshStandardMaterial({ 
+        color: CONFIG.cGround, 
+        roughness: 0.8,
+        metalness: 0.2
+    });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -217,10 +212,14 @@ function createWorld() {
     const wallGeo = new THREE.BoxGeometry(CONFIG.w, CONFIG.h, CONFIG.d);
     const doorGeo = new THREE.BoxGeometry(CONFIG.doorW, CONFIG.doorH, 2);
 
+    // 墙体材质：增加一点点自发光 (emissive)，模拟城市光污染反射，防止死黑
     const wallMat = new THREE.MeshStandardMaterial({ 
         map: textures.wall,
         color: 0xffffff,
-        roughness: 0.9
+        roughness: 0.9,
+        metalness: 0.1,
+        emissive: 0x111122, // 微弱的蓝色自发光
+        emissiveIntensity: 0.2
     });
     if(textures.wall) textures.wall.repeat.set(2, 2);
 
@@ -228,7 +227,9 @@ function createWorld() {
         map: textures.stair,
         color: 0xffffff,
         roughness: 0.7,
-        metalness: 0.5
+        metalness: 0.6,
+        emissive: 0x221100,
+        emissiveIntensity: 0.1
     });
 
     for (let i = 0; i < CONFIG.count; i++) {
@@ -255,17 +256,24 @@ function createWorld() {
         worldGroup.add(mesh);
         house.mesh = mesh;
 
-        // 门 (发光)
-        const doorMesh = new THREE.Mesh(doorGeo, new THREE.MeshBasicMaterial({
-            color: CONFIG.cDoor
-        }));
+        // 门：使用 Standard 材质但高自发光，这样它既亮又能投射光照影响
+        const doorMat = new THREE.MeshStandardMaterial({
+            color: 0x000000,
+            emissive: CONFIG.cDoor,
+            emissiveIntensity: 2.5, // 很强的自发光
+            toneMapped: false
+        });
+        const doorMesh = new THREE.Mesh(doorGeo, doorMat);
         doorMesh.position.set(x, CONFIG.doorH/2, z + CONFIG.d/2 + 1);
+        doorMesh.castShadow = true;
         worldGroup.add(doorMesh);
         house.doorMesh = doorMesh;
 
-        // 灯光 (简化)
-        const light = new THREE.PointLight(CONFIG.cDoor, 0.8, 50);
-        light.position.set(x, CONFIG.doorH + 5, z + CONFIG.d/2 + 2);
+        // 门口灯光：✅ 增加强度和范围
+        const light = new THREE.PointLight(CONFIG.cDoor, 1.5, 80); // 强度 1.5，范围 80
+        light.position.set(x, CONFIG.doorH + 5, z + CONFIG.d/2 + 5);
+        light.castShadow = true;
+        light.shadow.bias = -0.001;
         worldGroup.add(light);
         house.light = light;
 
@@ -338,7 +346,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 7. 物理与碰撞
+// 7. 物理与碰撞 (保持逻辑不变)
 // ==========================================
 function updatePhysics() {
     const dt = Math.min(clock.getDelta(), 0.1);
@@ -478,7 +486,7 @@ function updateVisibility() {
         if (h.mesh) h.mesh.visible = visible;
         if (h.doorMesh) h.doorMesh.visible = visible;
         if (h.light) h.light.visible = visible;
-        if (visible && h.light) h.light.intensity = Math.max(0.2, 1.0 - dist/renderDist);
+        if (visible && h.light) h.light.intensity = Math.max(0.5, 1.5 - dist/renderDist);
     });
 }
 
@@ -499,11 +507,10 @@ function animate() {
 
     updateVisibility();
     
-    // 安全的渲染调用
     try {
         renderer.render(scene, camera);
     } catch (e) {
-        console.error("渲染错误:", e);
+        console.error("Render Error:", e);
     }
 }
 
@@ -592,7 +599,7 @@ function updateUI() {
 
     if (currentState === STATE.MENU) {
         uiContainer.style.background = '#000';
-        drawOverlay("后朋克之城 200 (稳定版)", [
+        drawOverlay("后朋克之城 200 (明亮版)", [
             {txt:"开始游戏", act:startGame},
             {txt:"退出", act:()=>window.close()}
         ]);
@@ -659,9 +666,8 @@ function startGame() {
     player.vel.set(0,0,0);
     player.yaw = 0;
     updateUI();
-    // 延迟请求锁定，确保 UI 已经隐藏
     setTimeout(() => {
-        renderer.domElement.requestPointerLock().catch(e => console.log("锁定失败", e));
+        renderer.domElement.requestPointerLock().catch(e => console.log("Lock failed", e));
     }, 100);
 }
 
@@ -669,7 +675,7 @@ function resumeGame() {
     currentState = STATE.PLAYING;
     updateUI();
     setTimeout(() => {
-        renderer.domElement.requestPointerLock().catch(e => console.log("锁定失败", e));
+        renderer.domElement.requestPointerLock().catch(e => console.log("Lock failed", e));
     }, 100);
 }
 
@@ -686,7 +692,7 @@ function toggleInventory() {
     } else if (currentState === STATE.INV) {
         currentState = STATE.PLAYING;
         setTimeout(() => {
-            renderer.domElement.requestPointerLock().catch(e => console.log("锁定失败", e));
+            renderer.domElement.requestPointerLock().catch(e => console.log("Lock failed", e));
         }, 100);
     }
     updateUI();
