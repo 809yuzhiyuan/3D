@@ -1,50 +1,54 @@
 import * as THREE from 'three';
 
 // ==========================================
-// 1. 配置 (Configuration)
+// 1. 配置 (Configuration) - 逼真模式
 // ==========================================
 const CONFIG = {
     fov: 75,
     near: 0.1,
-    far: 2000,
-    bgColor: 0x050505,
-    fogColor: 0x050505,
-    fogDensity: 0.0015,
+    far: 1000, // 缩短视距以增强雾气感
+    bgColor: 0x050510, // 深蓝色夜空
+    fogColor: 0x050510,
+    fogDensity: 0.015, // 更浓的雾
 
     // 玩家
     heightStand: 1.7,
     heightCrouch: 0.9,
     radius: 0.4,
-    speedWalk: 12.0,
-    speedRun: 35.0,
+    speedWalk: 10.0,
+    speedRun: 25.0,
     speedCrouch: 2.0,
-    jumpForce: 12.0,
-    gravity: 40.0,
+    jumpForce: 10.0,
+    gravity: 30.0,
     sensitivity: 0.002, 
 
     // 房子
-    count: 200,
-    gridCols: 20,
-    gridRows: 10,
-    spacing: 150,
-    w: 100, h: 90, d: 80,
+    count: 100, // 减少数量以保证光影性能
+    gridCols: 15,
+    gridRows: 8,
+    spacing: 120,
+    w: 80, h: 90, d: 60,
     floorH: 30,
     doorW: 20, doorH: 24,
-
-    // 颜色
-    cWall: 0xFFFFFF,
+    
+    // 材质颜色
+    cWall: 0x888888,
     cDoor: 0xFF0055,
-    cGrid: 0x00FFFF,
-    cStair: 0xFFAA00
+    cStair: 0xAA8844,
+    cGround: 0x111111
 };
 
 // ==========================================
 // 2. 全局变量
 // ==========================================
 let camera, scene, renderer;
-let linesGroup;
+let worldGroup; // 包含所有建筑
 let crosshair;
 let uiContainer;
+let clock = new THREE.Clock();
+
+// 纹理缓存
+const textures = {};
 
 const player = {
     pos: new THREE.Vector3(0, 2, 0),
@@ -55,20 +59,112 @@ const player = {
     crouching: false
 };
 
-const keys = {
-    w: false, a: false, s: false, d: false,
-    space: false, shift: false, ctrl: false
-};
+const keys = { w: false, a: false, s: false, d: false, space: false, shift: false, ctrl: false };
 let keyLocks = { e: false };
 
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
 let currentState = STATE.MENU;
 let isLocked = false;
 
-const houses = [];
+const houses = []; // 存储碰撞数据和网格引用
 
 // ==========================================
-// 3. 初始化 (✅ 修复黑屏问题)
+// 3. 工具：程序化生成纹理 (关键步骤)
+// ==========================================
+function createConcreteTexture() {
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    // 底色
+    ctx.fillStyle = '#444444';
+    ctx.fillRect(0, 0, size, size);
+    
+    // 噪点
+    for (let i = 0; i < 4000; i++) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const gray = Math.floor(Math.random() * 60 + 20);
+        ctx.fillStyle = `rgb(${gray},${gray},${gray})`;
+        ctx.fillRect(x, y, 2, 2);
+    }
+    
+    // 污渍/水痕
+    for (let i = 0; i < 50; i++) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const r = Math.random() * 50 + 10;
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        grad.addColorStop(0, 'rgba(0,0,0,0.2)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+}
+
+function createMetalTexture() {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    ctx.fillStyle = '#554433';
+    ctx.fillRect(0, 0, size, size);
+    
+    // 划痕
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 1;
+    for(let i=0; i<100; i++) {
+        ctx.beginPath();
+        ctx.moveTo(Math.random()*size, Math.random()*size);
+        ctx.lineTo(Math.random()*size, Math.random()*size);
+        ctx.stroke();
+    }
+    
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+}
+
+function createGlowTexture(colorStr) {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    const grad = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    grad.addColorStop(0, colorStr);
+    grad.addColorStop(0.5, colorStr.replace(')', ', 0.5)').replace('rgb', 'rgba'));
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    
+    const tex = new THREE.CanvasTexture(canvas);
+    return tex;
+}
+
+// 初始化纹理
+function initTextures() {
+    textures.wall = createConcreteTexture();
+    textures.stair = createMetalTexture();
+    textures.doorGlow = createGlowTexture('rgb(255, 0, 85)');
+}
+
+// ==========================================
+// 4. 初始化
 // ==========================================
 init();
 animate();
@@ -84,9 +180,14 @@ function init() {
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.shadowMap.enabled = true; // 开启阴影
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // 电影级色调映射
+    renderer.toneMappingExposure = 0.8;
     document.body.appendChild(renderer.domElement);
 
+    initTextures();
+    createLights();
     createWorld();
     createCrosshair();
     createUI();
@@ -106,38 +207,80 @@ function init() {
         isLocked = (document.pointerLockElement === renderer.domElement);
     });
 
-    // ✅ 关键修复：初始化后立即强制渲染一帧，防止黑屏
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 4. 世界构建
+// 5. 光照系统
+// ==========================================
+function createLights() {
+    // 环境光 (微弱的蓝色月光)
+    const ambientLight = new THREE.AmbientLight(0x404060, 0.3);
+    scene.add(ambientLight);
+
+    // 全局方向光 (模拟月亮/路灯总源)
+    const dirLight = new THREE.DirectionalLight(0xaaccff, 0.5);
+    dirLight.position.set(100, 200, 100);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 500;
+    dirLight.shadow.camera.left = -200;
+    dirLight.shadow.camera.right = 200;
+    dirLight.shadow.camera.top = 200;
+    dirLight.shadow.camera.bottom = -200;
+    scene.add(dirLight);
+}
+
+// ==========================================
+// 6. 世界构建 (实体化)
 // ==========================================
 function createWorld() {
-    linesGroup = new THREE.Group();
-    scene.add(linesGroup);
+    worldGroup = new THREE.Group();
+    scene.add(worldGroup);
 
-    const gridSize = 10000;
-    const gridDivs = 400;
-    const geoGrid = new THREE.GridHelper(gridSize, gridDivs, CONFIG.cGrid, CONFIG.cGrid);
-    geoGrid.position.y = 0;
-    
-    const matGlow = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending });
-    const matBright = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false });
-    
-    const gridGlow = new THREE.LineSegments(geoGrid.geometry, matGlow);
-    const gridBright = new THREE.LineSegments(geoGrid.geometry, matBright);
-    gridBright.position.y = 0.1;
-    
-    scene.add(gridGlow, gridBright);
+    // 地面 (带反射感的实体)
+    const groundGeo = new THREE.PlaneGeometry(20000, 20000);
+    const groundMat = new THREE.MeshStandardMaterial({ 
+        color: CONFIG.cGround, 
+        roughness: 0.8, 
+        metalness: 0.2 
+    });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
 
     const cols = CONFIG.gridCols;
     const rows = CONFIG.gridRows;
     const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
     const startZ = -((rows * CONFIG.spacing) / 2) + CONFIG.spacing/2;
 
-    const houseGeoCache = createHouseGeometry();
-    const doorGeoCache = createDoorGeometry();
+    // 复用几何体以提高性能
+    const wallGeo = new THREE.BoxGeometry(CONFIG.w, CONFIG.h, CONFIG.d);
+    // 调整UV以适配纹理重复
+    // 注意：BoxGeometry的UV默认是每面独立，这里我们简单处理，实际项目中可能需要自定义UV
+    
+    const doorGeo = createDoorMeshGeometry();
+
+    // 材质
+    const wallMat = new THREE.MeshStandardMaterial({ 
+        map: textures.wall,
+        color: 0xffffff,
+        roughness: 0.9,
+        metalness: 0.1
+    });
+    textures.wall.repeat.set(4, 4); // 墙面纹理重复
+
+    const stairMat = new THREE.MeshStandardMaterial({
+        map: textures.stair,
+        color: 0xffffff,
+        roughness: 0.6,
+        metalness: 0.8,
+        emissive: 0x221100,
+        emissiveIntensity: 0.2
+    });
 
     for (let i = 0; i < CONFIG.count; i++) {
         const col = i % cols;
@@ -152,88 +295,99 @@ function createWorld() {
             x, z,
             minX: x - CONFIG.w/2, maxX: x + CONFIG.w/2,
             minZ: z - CONFIG.d/2, maxZ: z + CONFIG.d/2,
-            mesh: null, doorMesh: null
+            mesh: null, doorMesh: null, light: null
         };
 
-        const mesh = new THREE.LineSegments(houseGeoCache, new THREE.LineBasicMaterial({ 
-            color: CONFIG.cWall, transparent: true, opacity: 1, depthWrite: false, toneMapped: false 
-        }));
+        // 1. 主体建筑
+        const mesh = new THREE.Mesh(wallGeo, wallMat);
         mesh.position.set(x, CONFIG.h/2, z);
-        mesh.visible = false;
-        linesGroup.add(mesh);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        worldGroup.add(mesh);
         house.mesh = mesh;
 
-        const doorMesh = new THREE.LineSegments(doorGeoCache, new THREE.LineBasicMaterial({ 
-            color: CONFIG.cDoor, depthWrite: false, toneMapped: false 
+        // 2. 门 (发光体)
+        const doorMesh = new THREE.Mesh(doorGeo, new THREE.MeshStandardMaterial({
+            color: 0x000000,
+            emissive: CONFIG.cDoor,
+            emissiveIntensity: 2,
+            toneMapped: false
         }));
-        doorMesh.position.set(x, 0, z);
-        doorMesh.visible = false;
-        linesGroup.add(doorMesh);
+        doorMesh.position.set(x, CONFIG.doorH/2, z + CONFIG.d/2 + 0.5); // 稍微突出墙面
+        worldGroup.add(doorMesh);
         house.doorMesh = doorMesh;
+
+        // 3. 门上方的灯 (点光源)
+        const light = new THREE.PointLight(CONFIG.cDoor, 1, 60);
+        light.position.set(x, CONFIG.doorH + 5, z + CONFIG.d/2 + 2);
+        light.castShadow = true;
+        light.shadow.bias = -0.0001;
+        worldGroup.add(light);
+        house.light = light;
+
+        // 4. 楼梯 (简化为斜坡实体)
+        createStairs(x, z, stairMat);
 
         houses.push(house);
     }
 }
 
-function createHouseGeometry() {
-    const hw = CONFIG.w/2, hd = CONFIG.d/2, hh = CONFIG.h/2;
-    const points = [];
-    const addLine = (x1,y1,z1, x2,y2,z2) => points.push(x1,y1,z1, x2,y2,z2);
+function createDoorMeshGeometry() {
+    const dw = CONFIG.doorW;
+    const dh = CONFIG.doorH;
+    const depth = 2;
+    const geo = new THREE.BoxGeometry(dw, dh, depth);
+    return geo;
+}
 
-    for(let i=0; i<=CONFIG.h; i+=CONFIG.floorH) {
-        const y = i - hh;
-        addLine(-hw, y, -hd, hw, y, -hd);
-        addLine(hw, y, -hd, hw, y, hd);
-        addLine(hw, y, hd, -hw, y, hd);
-        addLine(-hw, y, hd, -hw, y, -hd);
-    }
+function createStairs(hx, hz, material) {
+    const hw = CONFIG.w/2, hd = CONFIG.d/2;
+    const sx = hx - hw + 10;
+    const szStart = hz + hd - 5;
     
-    const corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
-    corners.forEach(([cx, cz]) => addLine(cx, -hh, cz, cx, hh, cz));
-
-    for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
-        const y = i - hh;
-        for(let k=-hw; k<=hw; k+=20) addLine(k, y, -hd, k, y, hd);
-        for(let k=-hd; k<=hd; k+=20) addLine(-hw, y, k, hw, y, k);
-    }
-
-    const sx = -hw + 10, sz = hd - 5;
-    let cx = sx, cz = sz, cy = -hh;
-    let dir = -1;
     const steps = 10;
     const stepH = CONFIG.floorH/steps;
     const stepD = 40/steps;
+    const stepW = 12;
     
+    let cx = sx, cz = szStart, cy = 0;
+    let dir = -1;
+
+    const stairGroup = new THREE.Group();
+
     for(let f=0; f<CONFIG.h/CONFIG.floorH - 1; f++) {
         for(let s=0; s<steps; s++) {
-            const ny = cy + stepH;
-            const nz = cz + stepD*dir;
-            points.push(cx-6, ny, nz, cx+6, ny, nz);
-            points.push(cx, cy, nz, cx, ny, nz);
-            cy = ny; cz = nz;
+            const stepGeo = new THREE.BoxGeometry(stepW, stepH, stepD);
+            const step = new THREE.Mesh(stepGeo, material);
+            
+            // 计算中心位置
+            const nextZ = cz + stepD*dir;
+            const nextY = cy + stepH/2;
+            
+            step.position.set(cx, nextY, nextZ);
+            step.castShadow = true;
+            step.receiveShadow = true;
+            stairGroup.add(step);
+            
+            cy += stepH;
+            cz = nextZ;
         }
+        // 平台
         const pz = cz + 5*dir;
-        addLine(cx-6, cy, cz, cx+6, cy, cz);
-        addLine(cx-6, cy, pz, cx+6, cy, pz);
-        addLine(cx-6, cy, cz, cx-6, cy, pz);
-        addLine(cx+6, cy, cz, cx+6, cy, pz);
+        const platGeo = new THREE.BoxGeometry(stepW, stepH, 10);
+        const plat = new THREE.Mesh(platGeo, material);
+        plat.position.set(cx, cy + stepH/2, pz);
+        plat.castShadow = true;
+        stairGroup.add(plat);
         
         dir *= -1;
         cz = pz + 5*dir;
     }
-
-    return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
-}
-
-function createDoorGeometry() {
-    const hw = CONFIG.w/2, hd = CONFIG.d/2;
-    const dw = CONFIG.doorW/2;
-    const dh = CONFIG.doorH;
-    const points = [];
-    points.push(-dw, 0, hd, -dw, dh, hd);
-    points.push(-dw, dh, hd, dw, dh, hd);
-    points.push(dw, dh, hd, dw, 0, hd);
-    return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+    
+    worldGroup.add(stairGroup);
+    // 注意：楼梯没有加入碰撞检测数组 houses，需要在 checkCollision 中特殊处理或简化
+    // 为了代码简洁，本示例中楼梯主要作为视觉，碰撞逻辑仍沿用之前的数学计算（因为楼梯是连续的斜面，用离散方块做碰撞很复杂）
+    // 但视觉上已经是实体了。
 }
 
 function createCrosshair() {
@@ -250,15 +404,15 @@ function createCrosshair() {
     const tex = new THREE.CanvasTexture(cvs);
     const mat = new THREE.SpriteMaterial({map:tex, depthTest:false, depthWrite:false, renderOrder:9999, toneMapped:false});
     crosshair = new THREE.Sprite(mat);
-    crosshair.scale.set(0.5,0.5,1);
+    crosshair.scale.set(0.4,0.4,1);
     scene.add(crosshair);
 }
 
 // ==========================================
-// 5. 物理与碰撞 (✅ 修复楼梯碰撞)
+// 7. 物理与碰撞 (保持逻辑不变，适配新坐标)
 // ==========================================
 function updatePhysics() {
-    const dt = 0.016;
+    const dt = Math.min(clock.getDelta(), 0.1); // 限制最大dt防止穿模
 
     if (keys.ctrl && !player.crouching) {
         player.crouching = true;
@@ -281,16 +435,14 @@ function updatePhysics() {
 
     if (keys.w) move.add(fwd);
     if (keys.s) move.sub(fwd);
-    if (keys.a) move.add(right);   // 修正后的 A/D
-    if (keys.d) move.sub(right);   // 修正后的 A/D
+    if (keys.a) move.add(right);
+    if (keys.d) move.sub(right);
 
     const len = move.length();
     if (len > 0) {
         move.normalize().multiplyScalar(spd * dt);
-
         const nextX = player.pos.clone(); nextX.x += move.x;
         if (!checkCollision(nextX)) player.pos.x = nextX.x;
-
         const nextZ = player.pos.clone(); nextZ.z += move.z;
         if (!checkCollision(nextZ)) player.pos.z = nextZ.z;
     }
@@ -311,22 +463,14 @@ function checkCollision(pos) {
     const r = CONFIG.radius;
     for (const h of houses) {
         if (Math.abs(pos.x - h.x) > CONFIG.w/2 + r + 10 || Math.abs(pos.z - h.z) > CONFIG.d/2 + r + 10) continue;
-
-        const minX = h.minX, maxX = h.maxX;
-        const minZ = h.minZ, maxZ = h.maxZ;
-        const minY = 0, maxY = CONFIG.h;
-
-        if (pos.y < minY || pos.y > maxY) continue;
-
+        const minX = h.minX, maxX = h.maxX, minZ = h.minZ, maxZ = h.maxZ;
+        if (pos.y < 0 || pos.y > CONFIG.h) continue;
         const frontZ = maxZ;
-        const dw = CONFIG.doorW/2;
-        const dh = CONFIG.doorH;
-        
+        const dw = CONFIG.doorW/2, dh = CONFIG.doorH;
         if (Math.abs(pos.z - frontZ) < r) {
             if (pos.y < dh && pos.x > h.x - dw - r && pos.x < h.x + dw + r) continue;
             if (pos.x >= minX - r && pos.x <= maxX + r) return true;
         }
-
         const inX = pos.x > minX - r && pos.x < maxX + r;
         const inZ = pos.z > minZ - r && pos.z < maxZ + r;
         if (inX && inZ) {
@@ -337,34 +481,21 @@ function checkCollision(pos) {
     return false;
 }
 
-// ✅ 核心修复：重写地面和楼梯检测逻辑
 function checkGroundAndStairs() {
     let supportY = 0;
     let onStair = false;
     let stairY = 0;
 
     for (const h of houses) {
-        // 快速排除
         if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 10 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 10) continue;
-        
-        // 必须在房子范围内
         if (player.pos.x > h.minX && player.pos.x < h.maxX && player.pos.z > h.minZ && player.pos.z < h.maxZ) {
-            
-            // 1. 优先检测楼梯 (扩大检测范围，增加容错)
             const calculatedStairY = getStairHeightRobust(player.pos.x, player.pos.z, h.x, h.z);
-            
             if (calculatedStairY !== null) {
                 onStair = true;
                 stairY = calculatedStairY;
-                // 如果在楼梯上，楼梯高度优先级最高
-                if (stairY > supportY) {
-                    supportY = stairY;
-                }
+                if (stairY > supportY) supportY = stairY;
             }
-
-            // 2. 检测楼层地板 (常规楼层)
             for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
-                // 增加一点垂直容差，防止在楼层边缘掉落
                 if (player.pos.y > i - 2 && player.pos.y < i + 2) {
                     if (i > supportY) supportY = i;
                 }
@@ -375,9 +506,7 @@ function checkGroundAndStairs() {
     const targetH = player.crouching ? CONFIG.heightCrouch : CONFIG.heightStand;
     const standY = supportY + targetH;
 
-    // 如果在楼梯上，进行特殊的“吸附”处理，防止抖动
     if (onStair) {
-        // 如果玩家就在楼梯表面附近，强制修正 Y 坐标
         if (Math.abs(player.pos.y - (stairY + targetH)) < 1.5 && player.vel.y <= 0) {
             player.pos.y = stairY + targetH;
             player.vel.y = 0;
@@ -386,63 +515,47 @@ function checkGroundAndStairs() {
         }
     }
 
-    // 常规地面检测
     if (player.pos.y <= standY + 0.5 && player.vel.y <= 0) {
         player.pos.y = standY;
         player.vel.y = 0;
         player.grounded = true;
     } else {
-        // 只有当玩家明显高于支撑面时才视为在空中
-        if (player.pos.y > supportY + targetH + 1.0) {
-            player.grounded = false;
-        }
+        if (player.pos.y > supportY + targetH + 1.0) player.grounded = false;
     }
 }
 
-// ✅ 核心修复：更健壮的楼梯高度计算
 function getStairHeightRobust(x, z, hx, hz) {
     const hw = CONFIG.w/2, hd = CONFIG.d/2;
-    // 楼梯起始点
     const sx = hx - hw + 10;
     const szStart = hz + hd - 5;
-    
-    // 扩大 X 轴的判定范围，防止侧向掉落
-    const stairWidth = 14; // 原为 14 (7+7)，这里保持或微调
+    const stairWidth = 14;
     if (x < sx - stairWidth/2 || x > sx + stairWidth/2) return null;
-    
     const distZ = szStart - z;
-    
-    // 楼梯总长度约为 80
     if (distZ > -5 && distZ < 85) {
-        // 计算理论高度
         let h = (distZ / 80) * CONFIG.h;
-        
-        // 边界钳制
         if (h < 0) h = 0;
         if (h > CONFIG.h) h = CONFIG.h;
-        
         return h;
     }
-    
     return null;
 }
 
 // ==========================================
-// 6. 渲染管理 (✅ 确保菜单时也渲染)
+// 8. 渲染管理
 // ==========================================
 function updateVisibility() {
-    const renderDist = 400;
+    const renderDist = 300;
     houses.forEach(h => {
         const dist = Math.sqrt((player.pos.x - h.x)**2 + (player.pos.z - h.z)**2);
         const visible = dist < renderDist;
-        if (h.mesh.visible !== visible) {
-            h.mesh.visible = visible;
-            h.doorMesh.visible = visible;
-        }
+        // 简单的可见性裁剪，优化性能
+        if (h.mesh) h.mesh.visible = visible;
+        if (h.doorMesh) h.doorMesh.visible = visible;
+        if (h.light) h.light.visible = visible;
+        
         if (visible) {
-            const alpha = Math.max(0.1, 1.0 - dist/renderDist);
-            h.mesh.material.opacity = alpha;
-            h.doorMesh.material.opacity = alpha;
+            // 距离越远灯光越暗
+            if(h.light) h.light.intensity = Math.max(0.2, 1.0 - dist/renderDist);
         }
     });
 }
@@ -450,14 +563,12 @@ function updateVisibility() {
 function animate() {
     requestAnimationFrame(animate);
     
-    // 无论什么状态，都更新物理（如果在玩）和渲染
     if (currentState === STATE.PLAYING) {
         updatePhysics();
         const euler = new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ');
         camera.quaternion.setFromEuler(euler);
     }
     
-    // 即使在菜单或暂停，也更新准星位置（防止消失）和可见性
     if (crosshair) {
         crosshair.position.copy(camera.position);
         const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
@@ -465,13 +576,11 @@ function animate() {
     }
 
     updateVisibility();
-    
-    // 每一帧都强制渲染，解决黑屏问题
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 7. 输入处理
+// 9. 输入与 UI (保持汉化)
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
@@ -482,22 +591,14 @@ function onKeyDown(e) {
     if (code === 'Space') keys.space = true;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = true;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = true;
-    
     if (code === 'KeyE' && !keyLocks.e) {
         if (currentState === STATE.PLAYING) toggleInventory();
         keyLocks.e = true;
     }
-    
     if (code === 'Escape') {
         if (currentState === STATE.INV) toggleInventory();
-        else if (currentState === STATE.PLAYING) {
-            currentState = STATE.PAUSED;
-            document.exitPointerLock();
-            updateUI();
-        } else if (currentState === STATE.PAUSED) {
-            currentState = STATE.MENU;
-            updateUI();
-        }
+        else if (currentState === STATE.PLAYING) { currentState = STATE.PAUSED; document.exitPointerLock(); updateUI(); }
+        else if (currentState === STATE.PAUSED) { currentState = STATE.MENU; updateUI(); }
     }
 }
 
@@ -515,7 +616,6 @@ function onKeyUp(e) {
 
 function onMouseMove(e) {
     if (currentState !== STATE.PLAYING || !isLocked) return;
-    
     player.yaw -= e.movementX * CONFIG.sensitivity;
     player.pitch -= e.movementY * CONFIG.sensitivity;
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
@@ -525,18 +625,14 @@ function onResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // 调整大小时也强制渲染一帧
     renderer.render(scene, camera);
 }
 
-// ==========================================
-// 8. UI 系统
-// ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
     Object.assign(uiContainer.style, {
         position:'absolute', top:0, left:0, width:'100%', height:'100%',
-        pointerEvents:'none', fontFamily:'"Microsoft YaHei", "Courier New", monospace', color:'#FFF', userSelect:'none'
+        pointerEvents:'none', fontFamily:'"Microsoft YaHei", sans-serif', color:'#FFF', userSelect:'none'
     });
     document.body.appendChild(uiContainer);
     updateUI();
@@ -556,33 +652,25 @@ function updateUI() {
         const info = document.createElement('div');
         Object.assign(info.style, { position:'absolute', top:'10px', left:'10px', fontSize:'14px', color:'#0F0', textShadow:'1px 1px 0 #000' });
         const floor = Math.floor(player.pos.y / CONFIG.floorH) + 1;
-        
-        const keyStatus = (k) => k ? "<span style='color:#FFF'>ON</span>" : "<span style='color:#666'>OFF</span>";
-        const runStatus = keys.shift ? "<span style='color:#FFD700'>加速跑</span>" : "步行";
-        const crouchStatus = keys.ctrl ? "<span style='color:#FFD700'>下蹲</span>" : "站立";
-        const mouseStatus = isLocked ? "<span style='color:#0F0'>已锁定</span>" : "<span style='color:#F00'>自由</span>";
-
         info.innerHTML = `
             坐标：${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
             楼层：<strong>${floor}</strong><br>
             方向：<strong>${dirStr}</strong><br>
-            按键：W[${keyStatus(keys.w)}] S[${keyStatus(keys.s)}] A[${keyStatus(keys.a)}] D[${keyStatus(keys.d)}]<br>
-            Shift [${runStatus}] | Ctrl [${crouchStatus}] | 空格 [${keys.space ? '跳跃' : '--'}]<br>
-            鼠标：${mouseStatus} | 房屋总数：${CONFIG.count}
+            渲染模式：<strong>逼真 PBR</strong>
         `;
         uiContainer.appendChild(info);
     }
 
     if (currentState === STATE.MENU) {
         uiContainer.style.background = '#000';
-        drawOverlay("后朋克之城 200", [
+        drawOverlay("后朋克之城 200 (逼真版)", [
             {txt:"开始游戏", act:startGame},
-            {txt:"退出游戏", act:()=>window.close()}
+            {txt:"退出", act:()=>window.close()}
         ]);
     } else if (currentState === STATE.PAUSED) {
-        uiContainer.style.background = 'rgba(0,0,0,0.7)';
+        uiContainer.style.background = 'rgba(0,0,0,0.8)';
         drawOverlay("已暂停", [
-            {txt:"继续游戏", act:resumeGame},
+            {txt:"继续", act:resumeGame},
             {txt:"返回菜单", act:goToMenu}
         ]);
     } else if (currentState === STATE.INV) {
@@ -596,7 +684,6 @@ function drawOverlay(title, btns) {
     t.innerText = title;
     Object.assign(t.style, { textAlign:'center', marginTop:'15vh', fontSize:'60px', color:'#FFD700', margin:0, textShadow:'2px 2px #000' });
     uiContainer.appendChild(t);
-    
     btns.forEach(b => {
         const el = document.createElement('div');
         el.innerText = b.txt;
@@ -620,9 +707,7 @@ function drawInventory() {
         padding:'20px', display:'flex', flexWrap:'wrap'
     });
     box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">背包 (按 E 关闭)</div>`;
-    
     const items = ["撬棍", "胶带", "钥匙", "地图", "照片", "打火机", "纸条", "收音机", "空位"];
-    
     items.forEach((n, i) => {
         const s = document.createElement('div');
         const sel = (i===0);
