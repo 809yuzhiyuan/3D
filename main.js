@@ -36,7 +36,7 @@ const CONFIG = {
     cDoor: 0xFF0055,
     cGrid: 0x00FFFF,
     cStair: 0xFFAA00,
-    cChest: 0xFFD700
+    cChest: 0x8B4513 // 棕色箱子
 };
 
 // ==========================================
@@ -175,7 +175,6 @@ function createWorld() {
 
     const houseGeoCache = createHouseGeometry();
     const doorGeoCache = createDoorGeometry();
-    const chestGeoCache = createChestGeometry(); // 新增：箱子几何体
 
     for (let i = 0; i < CONFIG.count; i++) {
         const col = i % cols;
@@ -211,31 +210,23 @@ function createWorld() {
         linesGroup.add(doorMesh);
         house.doorMesh = doorMesh;
 
-        // 新增：为特定房子添加箱子
-        if (i === 0) { // 第一栋房子放置箱子
-            const chestMesh = new THREE.Mesh(
-                chestGeoCache, 
-                new THREE.MeshBasicMaterial({ 
-                    color: CONFIG.cChest, 
-                    wireframe: true,
-                    transparent: true,
-                    opacity: 0.8
-                })
-            );
-            chestMesh.position.set(x, 5, z - 20); // 在房子内部稍微靠后的位置
-            chestMesh.visible = false;
-            linesGroup.add(chestMesh);
-            house.chestMesh = chestMesh;
-            house.hasChest = true;
-            chestHouseIndex = i; // 记录有箱子的房子索引
-        }
+        // 创建箱子网格
+        const chestGeometry = new THREE.BoxGeometry(8, 6, 12);
+        const chestMaterial = new THREE.MeshBasicMaterial({ color: CONFIG.cChest, wireframe: true });
+        const chestMesh = new THREE.Mesh(chestGeometry, chestMaterial);
+        chestMesh.position.set(x, 3, z - 20); // 在房子前面放置箱子
+        chestMesh.visible = false;
+        scene.add(chestMesh);
+        house.chestMesh = chestMesh;
 
         houses.push(house);
     }
     
     // 设置第一个房子作为有箱子的房子，并移动玩家到此房子内
     if (houses.length > 0) {
+        chestHouseIndex = 0;
         const chestHouse = houses[chestHouseIndex];
+        chestHouse.hasChest = true; // 标记这栋房子有箱子
         player.pos.set(chestHouse.x, CONFIG.heightStand, chestHouse.z - 20); // 在房子内偏移一点
     }
 }
@@ -311,12 +302,6 @@ function createDoorGeometry() {
     points.push(-dw, dh, hd, dw, dh, hd);
     points.push(dw, dh, hd, dw, 0, hd);
     return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
-}
-
-// 新增：箱子几何体
-function createChestGeometry() {
-    const geometry = new THREE.BoxGeometry(8, 6, 12);
-    return geometry;
 }
 
 function createCrosshair() {
@@ -515,13 +500,13 @@ function updateVisibility() {
         if (h.mesh.visible !== visible) {
             h.mesh.visible = visible;
             h.doorMesh.visible = visible;
-            if (h.chestMesh) h.chestMesh.visible = visible; // 更新箱子可见性
+            h.chestMesh.visible = visible; // 更新箱子可见性
         }
         if (visible) {
             const alpha = Math.max(0.1, 1.0 - dist/renderDist);
             h.mesh.material.opacity = alpha;
             h.doorMesh.material.opacity = alpha;
-            if (h.chestMesh) h.chestMesh.material.opacity = alpha;
+            h.chestMesh.material.wireframeLinewidth = alpha * 2; // 调整线宽
         }
     });
 }
@@ -568,13 +553,11 @@ function onKeyDown(e) {
             currentState = STATE.PLAYING;
             setTimeout(() => renderer.domElement.requestPointerLock(), 50);
         } else if (currentState === STATE.CHEST) {
-            // 在箱子界面中按下E键打开背包
+            // 从箱子界面切换到双界面
             currentState = STATE.BOTH;
-            updateUI();
         } else if (currentState === STATE.BOTH) {
-            // 在双界面中按下E键返回仅箱子界面
+            // 从双界面切换回仅箱子界面
             currentState = STATE.CHEST;
-            updateUI();
         }
         updateUI(); // 确保UI同步更新
         e.preventDefault(); // 阻止默认行为
@@ -635,6 +618,7 @@ function onKeyUp(e) {
     if (code === 'KeyW') keys.w = false;
     if (code === 'KeyS') keys.s = false;
     if (code === 'KeyA') keys.a = false;
+    if (code === 'KeyD') keys.a = false;
     if (code === 'KeyD') keys.d = false;
     if (code === 'Space') keys.space = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = false;
@@ -824,7 +808,7 @@ function updateUI() {
             坐标：${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
             楼层：<strong>${floor}</strong><br>
             方向：<strong>${dirStr}</strong><br>
-            按键：W[${keyStatus(keys.w)}] S[${keyStatus(keys.s)}] A[${keyStatus(keys.a)}] D[${keyStatus(keys.d)}]<br>
+            按键：W[${keyStatus(keys.w)}] S[${keyStatus(keys.s)}}] A[${keyStatus(keys.a)}] D[${keyStatus(keys.d)}]<br>
             Shift [${runStatus}] | Ctrl [${crouchStatus}] | 空格 [${keys.space ? '跳跃' : '--'}]<br>
             鼠标：${mouseStatus} | 房屋总数：${CONFIG.count}
         `;
@@ -870,7 +854,7 @@ function drawOverlay(title, btns) {
             background:'#111', fontSize:'24px', transition:'0.2s'
         });
         el.onmouseenter = () => { el.style.background='#FFF'; el.style.color='#000'; };
-        el.onmouseleave = () => { el.style.background='#111'; el.style.color='#DDD'; };
+        el.onmouseleave = () => { el.style.background='#111'; el.style.color:'#DDD'; };
         el.onclick = b.act;
         uiContainer.appendChild(el);
     });
@@ -914,47 +898,27 @@ function drawChest() {
     });
     box.innerHTML = `<div style="width:100%;color:#FFA500;font-size:24px;margin-bottom:20px">箱子 (按 E 打开背包)</div>`;
     
-    if (CHEST_ITEMS.length > 0) {
-        CHEST_ITEMS.forEach((n, i) => {
-            const s = document.createElement('div');
-            Object.assign(s.style, {
-                width:'70px', height:'70px', margin:'10px', border:'1px solid #555',
-                background:'#331', color:'#A85',
-                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-                cursor:'pointer', fontSize:'14px'
-            });
-            s.innerHTML = `<div>${n}</div><div style='font-size:10px; margin-top:5px'>[R]</div>`;
-            s.onclick = () => {
-                // 将箱子中的物品转移到背包中
-                // 寻找背包中第一个空位
-                const emptySlotIndex = ITEMS.findIndex(item => item === "空");
-                if (emptySlotIndex !== -1) {
-                    ITEMS[emptySlotIndex] = n; // 将物品放入空位
-                    CHEST_ITEMS.splice(i, 1); // 从箱子中移除物品
-                    if (CHEST_ITEMS.length === 0) {
-                        // 如果箱子空了，回到主游戏界面
-                        currentState = STATE.PLAYING;
-                        setTimeout(() => renderer.domElement.requestPointerLock(), 50);
-                    }
-                    updateUI(); // 更新UI
-                }
-            };
-            box.appendChild(s);
+    CHEST_ITEMS.forEach((n, i) => {
+        const s = document.createElement('div');
+        Object.assign(s.style, {
+            width:'70px', height:'70px', margin:'10px', border:'1px solid #555',
+            background:'#331', color:'#A85',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            cursor:'pointer', fontSize:'14px'
         });
-    } else {
-        // 箱子为空时显示提示
-        const emptyMsg = document.createElement('div');
-        Object.assign(emptyMsg.style, {
-            width: '100%',
-            textAlign: 'center',
-            fontSize: '18px',
-            color: '#AAA',
-            padding: '50px 0'
-        });
-        emptyMsg.textContent = '箱子是空的';
-        box.appendChild(emptyMsg);
-    }
-    
+        s.innerHTML = `<div>${n}</div><div style='font-size:10px; margin-top:5px'>[R]</div>`;
+        s.onclick = () => {
+            // 将箱子中的物品转移到背包中
+            // 寻找背包中第一个空位
+            const emptySlotIndex = ITEMS.findIndex(item => item === "空");
+            if (emptySlotIndex !== -1) {
+                ITEMS[emptySlotIndex] = n; // 将物品放入空位
+                CHEST_ITEMS.splice(i, 1); // 从箱子中移除物品
+                updateUI(); // 更新UI
+            }
+        };
+        box.appendChild(s);
+    });
     uiContainer.appendChild(box);
 }
 
@@ -995,54 +959,39 @@ function drawBothInterfaces() {
     });
     chestBox.innerHTML = `<div style="width:100%;color:#FFA500;font-size:20px;margin-bottom:10px;text-align:center">箱子 (点击物品拖入背包)</div>`;
     
-    if (CHEST_ITEMS.length > 0) {
-        CHEST_ITEMS.forEach((n, i) => {
-            const s = document.createElement('div');
-            Object.assign(s.style, {
-                width:'60px', height:'60px', margin:'5px', border:'1px solid #555',
-                background:'#331', color:'#A85',
-                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-                cursor:'pointer', fontSize:'12px'
-            });
-            s.innerHTML = `<div>${n}</div><div style='font-size:8px; margin-top:2px'>[R]</div>`;
-            s.onclick = () => {
-                // 将箱子中的物品转移到背包中
-                // 寻找背包中第一个空位
-                const emptySlotIndex = ITEMS.findIndex(item => item === "空");
-                if (emptySlotIndex !== -1) {
-                    ITEMS[emptySlotIndex] = n; // 将物品放入空位
-                    CHEST_ITEMS.splice(i, 1); // 从箱子中移除物品
-                    if (CHEST_ITEMS.length === 0) {
-                        // 如果箱子空了，回到仅背包界面
-                        currentState = STATE.INV;
-                    }
-                    updateUI(); // 更新UI
+    CHEST_ITEMS.forEach((n, i) => {
+        const s = document.createElement('div');
+        Object.assign(s.style, {
+            width:'60px', height:'60px', margin:'5px', border:'1px solid #555',
+            background:'#331', color:'#A85',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            cursor:'pointer', fontSize:'12px'
+        });
+        s.innerHTML = `<div>${n}</div><div style='font-size:8px; margin-top:2px'>[R]</div>`;
+        s.onclick = () => {
+            // 将箱子中的物品转移到背包中
+            // 寻找背包中第一个空位
+            const emptySlotIndex = ITEMS.findIndex(item => item === "空");
+            if (emptySlotIndex !== -1) {
+                ITEMS[emptySlotIndex] = n; // 将物品放入空位
+                CHEST_ITEMS.splice(i, 1); // 从箱子中移除物品
+                if (CHEST_ITEMS.length === 0) {
+                    // 如果箱子空了，回到仅背包界面
+                    currentState = STATE.INV;
                 }
-            };
-            chestBox.appendChild(s);
-        });
-    } else {
-        // 箱子为空时显示提示
-        const emptyMsg = document.createElement('div');
-        Object.assign(emptyMsg.style, {
-            width: '100%',
-            textAlign: 'center',
-            fontSize: '18px',
-            color: '#AAA',
-            padding: '30px 0'
-        });
-        emptyMsg.textContent = '箱子是空的';
-        chestBox.appendChild(emptyMsg);
-    }
-    
+                updateUI(); // 更新UI
+            }
+        };
+        chestBox.appendChild(s);
+    });
     uiContainer.appendChild(chestBox);
 }
 
 function startGame() {
     currentState = STATE.PLAYING;
     // 将玩家出生位置设置为有箱子的房子
-    if (chestHouseIndex !== -1) {
-        const chestHouse = houses[chestHouseIndex];
+    if (houses.length > 0) {
+        const chestHouse = houses[0]; // 第一个房子有箱子
         player.pos.set(chestHouse.x, CONFIG.heightStand, chestHouse.z - 20); // 在房子内偏移一点
     } else {
         player.pos.set(0, 2, 0); // 如果没有找到有箱子的房子，则使用默认位置
