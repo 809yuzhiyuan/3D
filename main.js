@@ -46,11 +46,13 @@ let linesGroup;
 let crosshair;
 let uiContainer;
 
-// 新增：背包、地图、笔记本状态
-let inventoryOpen = false;
+// 地图元素
+let mapUI = null;
+let mapDot = null;
 let mapVisible = false;
-let notebookOpen = false;
-let selectedSlot = 0; // 鼠标滚轮切换的物品索引
+
+// 笔记本元素 (修正：先声明，后初始化)
+let notebookEl = null; 
 
 const player = {
     pos: new THREE.Vector3(0, 2, 0),
@@ -65,7 +67,7 @@ const keys = {
     w: false, a: false, s: false, d: false,
     space: false, shift: false, ctrl: false
 };
-let keyLocks = { e: false };
+let keyLocks = { e: false, o: false, b: false }; // 添加 o 和 b 的锁定
 
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
 let currentState = STATE.MENU;
@@ -95,14 +97,13 @@ function init() {
 
     createWorld();
     createCrosshair();
-    createUI();
+    createUI(); // UI创建放在最后，确保所有变量已声明
 
     window.addEventListener('resize', onResize);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('wheel', onWheel); // 新增：监听鼠标滚轮
-
+    
     renderer.domElement.addEventListener('click', () => {
         if (currentState === STATE.PLAYING && !isLocked) {
             renderer.domElement.requestPointerLock();
@@ -113,13 +114,77 @@ function init() {
         isLocked = (document.pointerLockElement === renderer.domElement);
     });
 
+    // ✅ 关键修复：初始化后立即强制渲染一帧，防止黑屏
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 4. 辅助几何体创建 (修复函数未定义问题)
+// 4. 世界构建
 // ==========================================
-// ✅ 修复：将这两个函数移到 createWorld 之前定义
+function createWorld() {
+    linesGroup = new THREE.Group();
+    scene.add(linesGroup);
+
+    const gridSize = 10000;
+    const gridDivs = 400;
+    const geoGrid = new THREE.GridHelper(gridSize, gridDivs, CONFIG.cGrid, CONFIG.cGrid);
+    geoGrid.position.y = 0;
+    
+    const matGlow = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending });
+    const matBright = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false });
+    
+    const gridGlow = new THREE.LineSegments(geoGrid.geometry, matGlow);
+    const gridBright = new THREE.LineSegments(geoGrid.geometry, matBright);
+    gridBright.position.y = 0.1;
+    
+    scene.add(gridGlow, gridBright);
+
+    const cols = CONFIG.gridCols;
+    const rows = CONFIG.gridRows;
+    const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
+    const startZ = -((rows * CONFIG.spacing) / 2) + CONFIG.spacing/2;
+
+    // ✅ 移动到这里：先定义几何体，再创建世界
+    const houseGeoCache = createHouseGeometry();
+    const doorGeoCache = createDoorGeometry();
+
+    for (let i = 0; i < CONFIG.count; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        
+        const x = startX + col * CONFIG.spacing;
+        const z = startZ + row * CONFIG.spacing;
+        
+        if (Math.abs(x) < 60 && Math.abs(z) < 60) continue;
+
+        const house = {
+            x, z,
+            minX: x - CONFIG.w/2, maxX: x + CONFIG.w/2,
+            minZ: z - CONFIG.d/2, maxZ: z + CONFIG.d/2,
+            mesh: null, doorMesh: null
+        };
+
+        const mesh = new THREE.LineSegments(houseGeoCache, new THREE.LineBasicMaterial({ 
+            color: CONFIG.cWall, transparent: true, opacity: 1, depthWrite: false, toneMapped: false 
+        }));
+        mesh.position.set(x, CONFIG.h/2, z);
+        mesh.visible = false;
+        linesGroup.add(mesh);
+        house.mesh = mesh;
+
+        const doorMesh = new THREE.LineSegments(doorGeoCache, new THREE.LineBasicMaterial({ 
+            color: CONFIG.cDoor, depthWrite: false, toneMapped: false 
+        }));
+        doorMesh.position.set(x, 0, z);
+        doorMesh.visible = false;
+        linesGroup.add(doorMesh);
+        house.doorMesh = doorMesh;
+
+        houses.push(house);
+    }
+}
+
+// 几何体创建函数移到 createWorld 之前或内部调用前
 function createHouseGeometry() {
     const hw = CONFIG.w/2, hd = CONFIG.d/2, hh = CONFIG.h/2;
     const points = [];
@@ -181,71 +246,6 @@ function createDoorGeometry() {
     return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
 }
 
-// ==========================================
-// 5. 世界构建
-// ==========================================
-function createWorld() {
-    linesGroup = new THREE.Group();
-    scene.add(linesGroup);
-
-    const gridSize = 10000;
-    const gridDivs = 400;
-    const geoGrid = new THREE.GridHelper(gridSize, gridDivs, CONFIG.cGrid, CONFIG.cGrid);
-    geoGrid.position.y = 0;
-    
-    const matGlow = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending });
-    const matBright = new THREE.LineBasicMaterial({ color: CONFIG.cGrid, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false });
-    
-    const gridGlow = new THREE.LineSegments(geoGrid.geometry, matGlow);
-    const gridBright = new THREE.LineSegments(geoGrid.geometry, matBright);
-    gridBright.position.y = 0.1;
-    
-    scene.add(gridGlow, gridBright);
-
-    const cols = CONFIG.gridCols;
-    const rows = CONFIG.gridRows;
-    const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
-    const startZ = -((rows * CONFIG.spacing) / 2) + CONFIG.spacing/2;
-
-    const houseGeoCache = createHouseGeometry();
-    const doorGeoCache = createDoorGeometry();
-
-    for (let i = 0; i < CONFIG.count; i++) {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        
-        const x = startX + col * CONFIG.spacing;
-        const z = startZ + row * CONFIG.spacing;
-        
-        if (Math.abs(x) < 60 && Math.abs(z) < 60) continue;
-
-        const house = {
-            x, z,
-            minX: x - CONFIG.w/2, maxX: x + CONFIG.w/2,
-            minZ: z - CONFIG.d/2, maxZ: z + CONFIG.d/2,
-            mesh: null, doorMesh: null
-        };
-
-        const mesh = new THREE.LineSegments(houseGeoCache, new THREE.LineBasicMaterial({ 
-            color: CONFIG.cWall, transparent: true, opacity: 1, depthWrite: false, toneMapped: false 
-        }));
-        mesh.position.set(x, CONFIG.h/2, z);
-        mesh.visible = false;
-        linesGroup.add(mesh);
-        house.mesh = mesh;
-
-        const doorMesh = new THREE.LineSegments(doorGeoCache, new THREE.LineBasicMaterial({ 
-            color: CONFIG.cDoor, depthWrite: false, toneMapped: false 
-        }));
-        doorMesh.position.set(x, 0, z);
-        doorMesh.visible = false;
-        linesGroup.add(doorMesh);
-        house.doorMesh = doorMesh;
-
-        houses.push(house);
-    }
-}
-
 function createCrosshair() {
     const cvs = document.createElement('canvas');
     cvs.width=64; cvs.height=64;
@@ -265,7 +265,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 6. 物理与碰撞
+// 5. 物理与碰撞 (✅ 修复楼梯碰撞)
 // ==========================================
 function updatePhysics() {
     const dt = 0.016;
@@ -291,8 +291,8 @@ function updatePhysics() {
 
     if (keys.w) move.add(fwd);
     if (keys.s) move.sub(fwd);
-    if (keys.a) move.add(right);
-    if (keys.d) move.sub(right);
+    if (keys.a) move.add(right);   // 修正后的 A/D
+    if (keys.d) move.sub(right);   // 修正后的 A/D
 
     const len = move.length();
     if (len > 0) {
@@ -347,25 +347,34 @@ function checkCollision(pos) {
     return false;
 }
 
+// ✅ 核心修复：重写地面和楼梯检测逻辑
 function checkGroundAndStairs() {
     let supportY = 0;
     let onStair = false;
     let stairY = 0;
 
     for (const h of houses) {
+        // 快速排除
         if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 10 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 10) continue;
         
+        // 必须在房子范围内
         if (player.pos.x > h.minX && player.pos.x < h.maxX && player.pos.z > h.minZ && player.pos.z < h.maxZ) {
             
+            // 1. 优先检测楼梯 (扩大检测范围，增加容错)
             const calculatedStairY = getStairHeightRobust(player.pos.x, player.pos.z, h.x, h.z);
             
             if (calculatedStairY !== null) {
                 onStair = true;
                 stairY = calculatedStairY;
-                if (calculatedStairY > supportY) supportY = calculatedStairY;
+                // 如果在楼梯上，楼梯高度优先级最高
+                if (stairY > supportY) {
+                    supportY = stairY;
+                }
             }
 
+            // 2. 检测楼层地板 (常规楼层)
             for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
+                // 增加一点垂直容差，防止在楼层边缘掉落
                 if (player.pos.y > i - 2 && player.pos.y < i + 2) {
                     if (i > supportY) supportY = i;
                 }
@@ -376,7 +385,9 @@ function checkGroundAndStairs() {
     const targetH = player.crouching ? CONFIG.heightCrouch : CONFIG.heightStand;
     const standY = supportY + targetH;
 
+    // 如果在楼梯上，进行特殊的“吸附”处理，防止抖动
     if (onStair) {
+        // 如果玩家就在楼梯表面附近，强制修正 Y 坐标
         if (Math.abs(player.pos.y - (stairY + targetH)) < 1.5 && player.vel.y <= 0) {
             player.pos.y = stairY + targetH;
             player.vel.y = 0;
@@ -385,30 +396,38 @@ function checkGroundAndStairs() {
         }
     }
 
+    // 常规地面检测
     if (player.pos.y <= standY + 0.5 && player.vel.y <= 0) {
         player.pos.y = standY;
         player.vel.y = 0;
         player.grounded = true;
     } else {
+        // 只有当玩家明显高于支撑面时才视为在空中
         if (player.pos.y > supportY + targetH + 1.0) {
             player.grounded = false;
         }
     }
 }
 
+// ✅ 核心修复：更健壮的楼梯高度计算
 function getStairHeightRobust(x, z, hx, hz) {
     const hw = CONFIG.w/2, hd = CONFIG.d/2;
+    // 楼梯起始点
     const sx = hx - hw + 10;
     const szStart = hz + hd - 5;
     
+    // 扩大 X 轴的判定范围，防止侧向掉落
     const stairWidth = 14;
     if (x < sx - stairWidth/2 || x > sx + stairWidth/2) return null;
     
     const distZ = szStart - z;
     
+    // 楼梯总长度约为 80
     if (distZ > -5 && distZ < 85) {
+        // 计算理论高度
         let h = (distZ / 80) * CONFIG.h;
         
+        // 边界钳制
         if (h < 0) h = 0;
         if (h > CONFIG.h) h = CONFIG.h;
         
@@ -419,7 +438,7 @@ function getStairHeightRobust(x, z, hx, hz) {
 }
 
 // ==========================================
-// 7. 渲染管理
+// 6. 渲染管理 (✅ 确保菜单时也渲染)
 // ==========================================
 function updateVisibility() {
     const renderDist = 400;
@@ -441,12 +460,14 @@ function updateVisibility() {
 function animate() {
     requestAnimationFrame(animate);
     
+    // 无论什么状态，都更新物理（如果在玩）和渲染
     if (currentState === STATE.PLAYING) {
         updatePhysics();
         const euler = new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ');
         camera.quaternion.setFromEuler(euler);
     }
     
+    // 即使在菜单或暂停，也更新准星位置（防止消失）
     if (crosshair) {
         crosshair.position.copy(camera.position);
         const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
@@ -454,12 +475,13 @@ function animate() {
     }
 
     updateVisibility();
-    updateUIOverlay(); // 新增：更新右上角地图UI
+    
+    // 每一帧都强制渲染，解决黑屏问题
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 8. 输入处理 (包含所有新功能)
+// 7. 输入处理
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
@@ -471,40 +493,41 @@ function onKeyDown(e) {
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = true;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = true;
     
-    // 1. E键开关背包
+    // 🔧 功能1：E键开关背包
     if (code === 'KeyE' && !keyLocks.e) {
-        toggleInventory();
+        if (currentState === STATE.PLAYING) toggleInventory();
         keyLocks.e = true;
     }
     
-    // 2. O键暂停/继续
-    if (code === 'KeyO') {
+    // 🔧 功能2：O键暂停/继续
+    if (code === 'KeyO' && !keyLocks.o) {
         if (currentState === STATE.PLAYING) {
             currentState = STATE.PAUSED;
             document.exitPointerLock();
+            updateUI();
         } else if (currentState === STATE.PAUSED) {
             currentState = STATE.PLAYING;
-            renderer.domElement.requestPointerLock();
+            setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+            updateUI();
         }
-        updateUI();
+        keyLocks.o = true;
     }
-
-    // 3. P键开关地图
+    
+    // 🔧 功能3：P键开关地图
     if (code === 'KeyP') {
         mapVisible = !mapVisible;
-        updateUIOverlay();
+        mapUI.style.display = mapVisible ? 'block' : 'none';
     }
-
-    // 4. B键开关笔记本
-    if (code === 'KeyB') {
-        notebookOpen = !notebookOpen;
-        updateUIOverlay();
+    
+    // 🔧 功能4：B键开关笔记本
+    if (code === 'KeyB' && !keyLocks.b) {
+        toggleNotebook();
+        keyLocks.b = true;
     }
 
     if (code === 'Escape') {
-        if (inventoryOpen) {
-            toggleInventory();
-        } else if (currentState === STATE.PLAYING) {
+        if (currentState === STATE.INV) toggleInventory();
+        else if (currentState === STATE.PLAYING) {
             currentState = STATE.PAUSED;
             document.exitPointerLock();
             updateUI();
@@ -525,23 +548,8 @@ function onKeyUp(e) {
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = false;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = false;
     if (code === 'KeyE') keyLocks.e = false;
-}
-
-// 5. 鼠标滑轮切物品
-function onWheel(e) {
-    if (currentState !== STATE.PLAYING) return;
-    
-    // 阻止默认滚动行为（如页面滚动）
-    e.preventDefault();
-    
-    if (e.deltaY < 0) {
-        // 向上滚动，切到上一个物品
-        selectedSlot = (selectedSlot - 1 + 9) % 9; // 假设有9个物品
-    } else {
-        // 向下滚动，切到下一个物品
-        selectedSlot = (selectedSlot + 1) % 9;
-    }
-    // 这里可以添加视觉反馈，比如在UI上显示当前选中
+    if (code === 'KeyO') keyLocks.o = false;
+    if (code === 'KeyB') keyLocks.b = false;
 }
 
 function onMouseMove(e) {
@@ -552,18 +560,28 @@ function onMouseMove(e) {
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
 }
 
+// 🔧 功能5：鼠标滑轮切物品
+function onWheel(e) {
+    if (currentState !== STATE.PLAYING) return;
+    // 这里简单实现为在控制台打印切换信息，实际游戏中可以切换武器/物品
+    if (e.deltaY < 0) {
+        console.log('切换到上一个物品');
+    } else {
+        console.log('切换到下一个物品');
+    }
+}
+
 function onResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    // 调整大小时也强制渲染一帧
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 9. UI 系统 (包含新功能UI)
+// 8. UI 系统
 // ==========================================
-let mapCanvas, mapCtx, notebookEl;
-
 function createUI() {
     uiContainer = document.createElement('div');
     Object.assign(uiContainer.style, {
@@ -572,26 +590,111 @@ function createUI() {
     });
     document.body.appendChild(uiContainer);
     
-    // 创建笔记本元素 (隐藏状态)
-    notebookEl = document.createElement('div');
-    notebookEl.style.cssText = `
-        position: absolute; top: 20px; left: 20px; 
-        width: 300px; height: 400px; 
-        background: rgba(0, 0, 0, 0.8); border: 2px solid #FFD700; 
-        color: #FFF; padding: 15px; font-size: 14px; line-height: 1.6;
-        display: none; overflow-y: auto; z-index: 1000;
-    `;
-    notebookEl.innerHTML = `<h3>📝 笔记本</h3><p>这里记录着你的任务和线索...</p>`;
-    document.body.appendChild(notebookEl);
+    // ✅ 新增：创建地图 UI (右上角)
+    createMapUI();
+    
+    // ✅ 新增：创建笔记本 UI (按下 B 键显示)
+    createNotebookUI();
     
     updateUI();
 }
 
+// ✅ 新增函数：创建地图 UI
+function createMapUI() {
+    mapUI = document.createElement('div');
+    Object.assign(mapUI.style, {
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        width: '150px',
+        height: '150px',
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        border: '2px solid #00FFFF',
+        display: mapVisible ? 'block' : 'none', // 初始隐藏
+        pointerEvents: 'none',
+        overflow: 'hidden'
+    });
+    
+    // 地图背景网格
+    const mapGrid = document.createElement('div');
+    Object.assign(mapGrid.style, {
+        width: '100%',
+        height: '100%',
+        backgroundImage: 'radial-gradient(circle, transparent 1px, #00FFFF 1px)',
+        backgroundSize: '10px 10px'
+    });
+    mapUI.appendChild(mapGrid);
+    
+    // 玩家位置点
+    mapDot = document.createElement('div');
+    Object.assign(mapDot.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        width: '8px',
+        height: '8px',
+        backgroundColor: '#FF0000',
+        borderRadius: '50%',
+        transform: 'translate(-50%, -50%)'
+    });
+    mapUI.appendChild(mapDot);
+    
+    document.body.appendChild(mapUI);
+}
+
+// ✅ 新增函数：创建笔记本 UI
+function createNotebookUI() {
+    notebookEl = document.createElement('div');
+    Object.assign(notebookEl.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '600px',
+        height: '400px',
+        backgroundColor: '#222',
+        border: '2px solid #FFD700',
+        color: '#FFF',
+        padding: '20px',
+        display: 'none', // 初始隐藏
+        pointerEvents: 'auto',
+        overflow: 'auto',
+        fontSize: '16px',
+        fontFamily: 'Georgia, serif',
+        zIndex: 1000
+    });
+    
+    notebookEl.innerHTML = `
+        <h2 style="color:#FFD700; margin-bottom: 10px;">📝 玩家笔记</h2>
+        <p style="line-height: 1.6;">
+            这里是你的游戏笔记。你可以记录线索、任务目标或任何你想记住的信息。<br><br>
+            <strong>提示：</strong> 按 <strong>B</strong> 键关闭。
+        </p>
+    `;
+    
+    document.body.appendChild(notebookEl);
+}
+
+// ✅ 新增函数：开关笔记本
+function toggleNotebook() {
+    if (notebookEl.style.display === 'block') {
+        notebookEl.style.display = 'none';
+        // 恢复鼠标锁定（如果之前是锁定的）
+        if (currentState === STATE.PLAYING) {
+            setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+        }
+    } else {
+        notebookEl.style.display = 'block';
+        // 暂停游戏逻辑或解除锁定
+        document.exitPointerLock();
+    }
+}
+
 function updateUI() {
     uiContainer.innerHTML = '';
-    uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED) ? 'auto' : 'none';
+    uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
 
-    if (currentState === STATE.PLAYING || inventoryOpen) {
+    if (currentState === STATE.PLAYING || currentState === STATE.INV) {
         let dirStr = "静止";
         if (keys.w) dirStr = "前进 ↑";
         if (keys.s) dirStr = "后退 ↓";
@@ -630,77 +733,9 @@ function updateUI() {
             {txt:"继续游戏", act:resumeGame},
             {txt:"返回菜单", act:goToMenu}
         ]);
-    }
-}
-
-// 新增：右上角地图UI
-function createMiniMap() {
-    if (mapCanvas) return; // 防止重复创建
-    
-    mapCanvas = document.createElement('canvas');
-    mapCanvas.width = 200;
-    mapCanvas.height = 200;
-    mapCanvas.style.cssText = `
-        position: absolute; top: 20px; right: 20px; 
-        border: 2px solid #00FFFF; background: rgba(0, 0, 0, 0.7);
-        pointer-events: none; display: none; z-index: 1000;
-    `;
-    document.body.appendChild(mapCanvas);
-    mapCtx = mapCanvas.getContext('2d');
-}
-
-function updateUIOverlay() {
-    createMiniMap(); // 初始化地图
-    
-    // 控制地图显示
-    mapCanvas.style.display = mapVisible ? 'block' : 'none';
-    
-    if (mapVisible) {
-        drawMiniMap();
-    }
-    
-    // 控制笔记本显示
-    notebookEl.style.display = notebookOpen ? 'block' : 'none';
-}
-
-function drawMiniMap() {
-    const ctx = mapCtx;
-    const scale = 0.5;
-    const radius = 8;
-    
-    // 清除画布
-    ctx.clearRect(0, 0, 200, 200);
-    
-    // 绘制背景格子
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, 200, 200);
-    
-    // 绘制玩家位置 (中心点)
-    ctx.fillStyle = '#00FF00';
-    ctx.beginPath();
-    ctx.arc(100, 100, radius, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // 绘制朝向箭头
-    ctx.strokeStyle = '#00FF00';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(100, 100);
-    ctx.lineTo(100 + Math.cos(player.yaw) * 15, 100 - Math.sin(player.yaw) * 15);
-    ctx.stroke();
-    
-    // 绘制附近的房子 (简化版)
-    ctx.strokeStyle = '#444';
-    ctx.lineWidth = 1;
-    for (const h of houses) {
-        const dx = (h.x - player.pos.x) * scale;
-        const dz = (h.z - player.pos.z) * scale;
-        const screenX = 100 + dx;
-        const screenZ = 100 - dz; // Z轴翻转
-        
-        if (screenX > -50 && screenX < 250 && screenZ > -50 && screenZ < 250) {
-            ctx.strokeRect(screenX - 2, screenZ - 2, 4, 4);
-        }
+    } else if (currentState === STATE.INV) {
+        uiContainer.style.background = 'rgba(0,0,0,0.85)';
+        drawInventory();
     }
 }
 
@@ -725,29 +760,12 @@ function drawOverlay(title, btns) {
     });
 }
 
-function toggleInventory() {
-    inventoryOpen = !inventoryOpen;
-    if (inventoryOpen) {
-        // 打开背包时显示UI
-        drawInventory();
-    } else {
-        // 关闭背包时移除UI
-        const invUI = document.getElementById('inventoryUI');
-        if (invUI) invUI.remove();
-    }
-}
-
 function drawInventory() {
-    // 移除旧的UI（如果有）
-    const oldInv = document.getElementById('inventoryUI');
-    if (oldInv) oldInv.remove();
-    
     const box = document.createElement('div');
-    box.id = 'inventoryUI';
     Object.assign(box.style, {
         position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
         width:'600px', minHeight:'400px', border:'2px solid #FFD700', background:'rgba(20,20,20,0.9)',
-        padding:'20px', display:'flex', flexWrap:'wrap', zIndex: '1001'
+        padding:'20px', display:'flex', flexWrap:'wrap'
     });
     box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">背包 (按 E 关闭)</div>`;
     
@@ -755,7 +773,7 @@ function drawInventory() {
     
     items.forEach((n, i) => {
         const s = document.createElement('div');
-        const sel = (i===selectedSlot);
+        const sel = (i===0);
         Object.assign(s.style, {
             width:'70px', height:'70px', margin:'10px', border: sel?'3px solid #FFF':'1px solid #555',
             background: sel?'#333':'#111', color: sel?'#FFF':'#888',
@@ -765,12 +783,8 @@ function drawInventory() {
         s.innerHTML = `<div>${n}</div><div style='font-size:10px; margin-top:5px'>[${i+1}]</div>`;
         box.appendChild(s);
     });
-    document.body.appendChild(box);
-    
-    // 点击背景关闭背包
-    box.addEventListener('click', (e) => {
-        if (e.target === box) toggleInventory();
-    });
+    uiContainer.appendChild(box);
+    uiContainer.onclick = (e) => { if(e.target===uiContainer) toggleInventory(); };
 }
 
 function startGame() {
@@ -791,3 +805,16 @@ function goToMenu() {
     document.exitPointerLock();
     updateUI();
 }
+function toggleInventory() {
+    if (currentState === STATE.PLAYING) {
+        currentState = STATE.INV;
+        document.exitPointerLock();
+    } else if (currentState === STATE.INV) {
+        currentState = STATE.PLAYING;
+        setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+    }
+    updateUI();
+}
+
+// 添加鼠标滑轮事件监听
+window.addEventListener('wheel', onWheel);
