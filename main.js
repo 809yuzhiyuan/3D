@@ -51,7 +51,7 @@ let mapUI = null;
 let mapDot = null;
 let mapVisible = false;
 
-// 笔记本元素 (修正：先声明，后初始化)
+// 笔记本元素
 let notebookEl = null; 
 
 const player = {
@@ -67,7 +67,9 @@ const keys = {
     w: false, a: false, s: false, d: false,
     space: false, shift: false, ctrl: false
 };
-let keyLocks = { e: false, o: false, b: false }; // 添加 o 和 b 的锁定
+
+// 修复：移除E键锁定，保留其他
+let keyLocks = { o: false, b: false };
 
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
 let currentState = STATE.MENU;
@@ -75,8 +77,12 @@ let isLocked = false;
 
 const houses = [];
 
+// 新增：物品系统变量
+const ITEMS = ["撬棍", "胶带", "钥匙", "地图", "照片", "打火机", "纸条", "收音机", "空位"];
+let currentItemIndex = 0;
+
 // ==========================================
-// 3. 初始化 (✅ 修复黑屏问题)
+// 3. 初始化
 // ==========================================
 init();
 animate();
@@ -97,12 +103,14 @@ function init() {
 
     createWorld();
     createCrosshair();
-    createUI(); // UI创建放在最后，确保所有变量已声明
+    createUI();
 
     window.addEventListener('resize', onResize);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('mousemove', onMouseMove);
+    // 新增：监听滚轮事件
+    window.addEventListener('wheel', onWheel);
     
     renderer.domElement.addEventListener('click', () => {
         if (currentState === STATE.PLAYING && !isLocked) {
@@ -114,7 +122,6 @@ function init() {
         isLocked = (document.pointerLockElement === renderer.domElement);
     });
 
-    // ✅ 关键修复：初始化后立即强制渲染一帧，防止黑屏
     renderer.render(scene, camera);
 }
 
@@ -144,7 +151,6 @@ function createWorld() {
     const startX = -((cols * CONFIG.spacing) / 2) + CONFIG.spacing/2;
     const startZ = -((rows * CONFIG.spacing) / 2) + CONFIG.spacing/2;
 
-    // ✅ 移动到这里：先定义几何体，再创建世界
     const houseGeoCache = createHouseGeometry();
     const doorGeoCache = createDoorGeometry();
 
@@ -184,7 +190,6 @@ function createWorld() {
     }
 }
 
-// 几何体创建函数移到 createWorld 之前或内部调用前
 function createHouseGeometry() {
     const hw = CONFIG.w/2, hd = CONFIG.d/2, hh = CONFIG.h/2;
     const points = [];
@@ -223,8 +228,7 @@ function createHouseGeometry() {
             cy = ny; cz = nz;
         }
         const pz = cz + 5*dir;
-        addLine(cx-6, cy, cz, cx+6, cy, cz);
-        addLine(cx-6, cy, pz, cx+6, cy, pz);
+        addLine(cx-6, cy, cz, cx+6, cy, pz);
         addLine(cx-6, cy, cz, cx-6, cy, pz);
         addLine(cx+6, cy, cz, cx+6, cy, pz);
         
@@ -265,7 +269,7 @@ function createCrosshair() {
 }
 
 // ==========================================
-// 5. 物理与碰撞 (✅ 修复楼梯碰撞)
+// 5. 物理与碰撞
 // ==========================================
 function updatePhysics() {
     const dt = 0.016;
@@ -291,8 +295,8 @@ function updatePhysics() {
 
     if (keys.w) move.add(fwd);
     if (keys.s) move.sub(fwd);
-    if (keys.a) move.add(right);   // 修正后的 A/D
-    if (keys.d) move.sub(right);   // 修正后的 A/D
+    if (keys.a) move.add(right);
+    if (keys.d) move.sub(right);
 
     const len = move.length();
     if (len > 0) {
@@ -347,34 +351,25 @@ function checkCollision(pos) {
     return false;
 }
 
-// ✅ 核心修复：重写地面和楼梯检测逻辑
 function checkGroundAndStairs() {
     let supportY = 0;
     let onStair = false;
     let stairY = 0;
 
     for (const h of houses) {
-        // 快速排除
         if (Math.abs(player.pos.x - h.x) > CONFIG.w/2 + 10 || Math.abs(player.pos.z - h.z) > CONFIG.d/2 + 10) continue;
         
-        // 必须在房子范围内
         if (player.pos.x > h.minX && player.pos.x < h.maxX && player.pos.z > h.minZ && player.pos.z < h.maxZ) {
             
-            // 1. 优先检测楼梯 (扩大检测范围，增加容错)
             const calculatedStairY = getStairHeightRobust(player.pos.x, player.pos.z, h.x, h.z);
             
             if (calculatedStairY !== null) {
                 onStair = true;
                 stairY = calculatedStairY;
-                // 如果在楼梯上，楼梯高度优先级最高
-                if (stairY > supportY) {
-                    supportY = stairY;
-                }
+                if (calculatedStairY > supportY) supportY = calculatedStairY;
             }
 
-            // 2. 检测楼层地板 (常规楼层)
             for(let i=1; i<CONFIG.h; i+=CONFIG.floorH) {
-                // 增加一点垂直容差，防止在楼层边缘掉落
                 if (player.pos.y > i - 2 && player.pos.y < i + 2) {
                     if (i > supportY) supportY = i;
                 }
@@ -385,9 +380,7 @@ function checkGroundAndStairs() {
     const targetH = player.crouching ? CONFIG.heightCrouch : CONFIG.heightStand;
     const standY = supportY + targetH;
 
-    // 如果在楼梯上，进行特殊的“吸附”处理，防止抖动
     if (onStair) {
-        // 如果玩家就在楼梯表面附近，强制修正 Y 坐标
         if (Math.abs(player.pos.y - (stairY + targetH)) < 1.5 && player.vel.y <= 0) {
             player.pos.y = stairY + targetH;
             player.vel.y = 0;
@@ -396,38 +389,30 @@ function checkGroundAndStairs() {
         }
     }
 
-    // 常规地面检测
     if (player.pos.y <= standY + 0.5 && player.vel.y <= 0) {
         player.pos.y = standY;
         player.vel.y = 0;
         player.grounded = true;
     } else {
-        // 只有当玩家明显高于支撑面时才视为在空中
         if (player.pos.y > supportY + targetH + 1.0) {
             player.grounded = false;
         }
     }
 }
 
-// ✅ 核心修复：更健壮的楼梯高度计算
 function getStairHeightRobust(x, z, hx, hz) {
     const hw = CONFIG.w/2, hd = CONFIG.d/2;
-    // 楼梯起始点
     const sx = hx - hw + 10;
     const szStart = hz + hd - 5;
     
-    // 扩大 X 轴的判定范围，防止侧向掉落
     const stairWidth = 14;
     if (x < sx - stairWidth/2 || x > sx + stairWidth/2) return null;
     
     const distZ = szStart - z;
     
-    // 楼梯总长度约为 80
     if (distZ > -5 && distZ < 85) {
-        // 计算理论高度
         let h = (distZ / 80) * CONFIG.h;
         
-        // 边界钳制
         if (h < 0) h = 0;
         if (h > CONFIG.h) h = CONFIG.h;
         
@@ -438,7 +423,7 @@ function getStairHeightRobust(x, z, hx, hz) {
 }
 
 // ==========================================
-// 6. 渲染管理 (✅ 确保菜单时也渲染)
+// 6. 渲染管理
 // ==========================================
 function updateVisibility() {
     const renderDist = 400;
@@ -460,14 +445,12 @@ function updateVisibility() {
 function animate() {
     requestAnimationFrame(animate);
     
-    // 无论什么状态，都更新物理（如果在玩）和渲染
     if (currentState === STATE.PLAYING) {
         updatePhysics();
         const euler = new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ');
         camera.quaternion.setFromEuler(euler);
     }
     
-    // 即使在菜单或暂停，也更新准星位置（防止消失）
     if (crosshair) {
         crosshair.position.copy(camera.position);
         const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
@@ -476,12 +459,11 @@ function animate() {
 
     updateVisibility();
     
-    // 每一帧都强制渲染，解决黑屏问题
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 7. 输入处理
+// 7. 输入处理 (✅ 修复 E 键)
 // ==========================================
 function onKeyDown(e) {
     const code = e.code;
@@ -493,13 +475,20 @@ function onKeyDown(e) {
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = true;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = true;
     
-    // 🔧 功能1：E键开关背包
-    if (code === 'KeyE' && !keyLocks.e) {
-        if (currentState === STATE.PLAYING) toggleInventory();
-        keyLocks.e = true;
+    // 🔧 修复 E 键：直接切换背包状态，无需锁
+    if (code === 'KeyE') {
+        if (currentState === STATE.PLAYING) {
+            currentState = STATE.INV;
+            document.exitPointerLock();
+        } else if (currentState === STATE.INV) {
+            currentState = STATE.PLAYING;
+            setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+        }
+        updateUI(); // 确保UI同步更新
+        e.preventDefault(); // 阻止默认行为
     }
     
-    // 🔧 功能2：O键暂停/继续
+    // 其他按键保持原有逻辑（带锁）
     if (code === 'KeyO' && !keyLocks.o) {
         if (currentState === STATE.PLAYING) {
             currentState = STATE.PAUSED;
@@ -513,21 +502,23 @@ function onKeyDown(e) {
         keyLocks.o = true;
     }
     
-    // 🔧 功能3：P键开关地图
     if (code === 'KeyP') {
         mapVisible = !mapVisible;
         mapUI.style.display = mapVisible ? 'block' : 'none';
     }
     
-    // 🔧 功能4：B键开关笔记本
     if (code === 'KeyB' && !keyLocks.b) {
         toggleNotebook();
         keyLocks.b = true;
     }
 
     if (code === 'Escape') {
-        if (currentState === STATE.INV) toggleInventory();
-        else if (currentState === STATE.PLAYING) {
+        if (currentState === STATE.INV) {
+            // ESC在背包中也关闭背包
+            currentState = STATE.PLAYING;
+            setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+            updateUI();
+        } else if (currentState === STATE.PLAYING) {
             currentState = STATE.PAUSED;
             document.exitPointerLock();
             updateUI();
@@ -547,9 +538,26 @@ function onKeyUp(e) {
     if (code === 'Space') keys.space = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = false;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = false;
-    if (code === 'KeyE') keyLocks.e = false;
+    // 不再处理E键的释放（因为没有锁了）
     if (code === 'KeyO') keyLocks.o = false;
     if (code === 'KeyB') keyLocks.b = false;
+}
+
+// 🔧 新增：滚动物品
+function onWheel(e) {
+    if (currentState !== STATE.PLAYING && currentState !== STATE.INV) return;
+    
+    if (e.deltaY < 0) {
+        // 向上滚动，选择前一个
+        currentItemIndex = (currentItemIndex - 1 + ITEMS.length) % ITEMS.length;
+    } else {
+        // 向下滚动，选择后一个
+        currentItemIndex = (currentItemIndex + 1) % ITEMS.length;
+    }
+    // 阻止默认滚动行为
+    e.preventDefault();
+    // 可选：打印到控制台查看切换
+    // console.log('当前物品:', ITEMS[currentItemIndex]);
 }
 
 function onMouseMove(e) {
@@ -560,27 +568,15 @@ function onMouseMove(e) {
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
 }
 
-// 🔧 功能5：鼠标滑轮切物品
-function onWheel(e) {
-    if (currentState !== STATE.PLAYING) return;
-    // 这里简单实现为在控制台打印切换信息，实际游戏中可以切换武器/物品
-    if (e.deltaY < 0) {
-        console.log('切换到上一个物品');
-    } else {
-        console.log('切换到下一个物品');
-    }
-}
-
 function onResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // 调整大小时也强制渲染一帧
     renderer.render(scene, camera);
 }
 
 // ==========================================
-// 8. UI 系统
+// 8. UI 系统 (✅ 修改：添加左下角物品显示)
 // ==========================================
 function createUI() {
     uiContainer = document.createElement('div');
@@ -590,16 +586,12 @@ function createUI() {
     });
     document.body.appendChild(uiContainer);
     
-    // ✅ 新增：创建地图 UI (右上角)
     createMapUI();
-    
-    // ✅ 新增：创建笔记本 UI (按下 B 键显示)
     createNotebookUI();
     
     updateUI();
 }
 
-// ✅ 新增函数：创建地图 UI
 function createMapUI() {
     mapUI = document.createElement('div');
     Object.assign(mapUI.style, {
@@ -610,12 +602,11 @@ function createMapUI() {
         height: '150px',
         backgroundColor: 'rgba(0,0,0,0.7)',
         border: '2px solid #00FFFF',
-        display: mapVisible ? 'block' : 'none', // 初始隐藏
+        display: mapVisible ? 'block' : 'none',
         pointerEvents: 'none',
         overflow: 'hidden'
     });
     
-    // 地图背景网格
     const mapGrid = document.createElement('div');
     Object.assign(mapGrid.style, {
         width: '100%',
@@ -625,7 +616,6 @@ function createMapUI() {
     });
     mapUI.appendChild(mapGrid);
     
-    // 玩家位置点
     mapDot = document.createElement('div');
     Object.assign(mapDot.style, {
         position: 'absolute',
@@ -642,7 +632,6 @@ function createMapUI() {
     document.body.appendChild(mapUI);
 }
 
-// ✅ 新增函数：创建笔记本 UI
 function createNotebookUI() {
     notebookEl = document.createElement('div');
     Object.assign(notebookEl.style, {
@@ -656,7 +645,7 @@ function createNotebookUI() {
         border: '2px solid #FFD700',
         color: '#FFF',
         padding: '20px',
-        display: 'none', // 初始隐藏
+        display: 'none',
         pointerEvents: 'auto',
         overflow: 'auto',
         fontSize: '16px',
@@ -675,17 +664,14 @@ function createNotebookUI() {
     document.body.appendChild(notebookEl);
 }
 
-// ✅ 新增函数：开关笔记本
 function toggleNotebook() {
     if (notebookEl.style.display === 'block') {
         notebookEl.style.display = 'none';
-        // 恢复鼠标锁定（如果之前是锁定的）
         if (currentState === STATE.PLAYING) {
             setTimeout(() => renderer.domElement.requestPointerLock(), 50);
         }
     } else {
         notebookEl.style.display = 'block';
-        // 暂停游戏逻辑或解除锁定
         document.exitPointerLock();
     }
 }
@@ -694,6 +680,27 @@ function updateUI() {
     uiContainer.innerHTML = '';
     uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
 
+    // 新增：左下角物品显示
+    if (currentState === STATE.PLAYING || currentState === STATE.INV) {
+        const itemInfo = document.createElement('div');
+        Object.assign(itemInfo.style, {
+            position:'absolute', 
+            bottom:'10px', // 改为底部
+            left:'10px',   // 改为左边
+            fontSize:'16px', 
+            color:'#FFD700', // 黄色更显眼
+            textShadow:'1px 1px 0 #000',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)', // 半透明背景
+            padding: '5px 10px',
+            borderRadius: '4px'
+        });
+        
+        // 显示当前物品
+        itemInfo.innerHTML = `当前物品: ${ITEMS[currentItemIndex]}`;
+        uiContainer.appendChild(itemInfo);
+    }
+
+    // 原来的顶部信息显示
     if (currentState === STATE.PLAYING || currentState === STATE.INV) {
         let dirStr = "静止";
         if (keys.w) dirStr = "前进 ↑";
@@ -769,11 +776,9 @@ function drawInventory() {
     });
     box.innerHTML = `<div style="width:100%;color:#FFD700;font-size:24px;margin-bottom:20px">背包 (按 E 关闭)</div>`;
     
-    const items = ["撬棍", "胶带", "钥匙", "地图", "照片", "打火机", "纸条", "收音机", "空位"];
-    
-    items.forEach((n, i) => {
+    ITEMS.forEach((n, i) => {
         const s = document.createElement('div');
-        const sel = (i===0);
+        const sel = (i === currentItemIndex); // 高亮当前选中物品
         Object.assign(s.style, {
             width:'70px', height:'70px', margin:'10px', border: sel?'3px solid #FFF':'1px solid #555',
             background: sel?'#333':'#111', color: sel?'#FFF':'#888',
@@ -815,6 +820,3 @@ function toggleInventory() {
     }
     updateUI();
 }
-
-// 添加鼠标滑轮事件监听
-window.addEventListener('wheel', onWheel);
