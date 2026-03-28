@@ -1,4 +1,4 @@
-// main.js
+import * as THREE from 'three';
 
 // ==========================================
 // 1. 配置 (Configuration)
@@ -59,7 +59,7 @@ const keys = {
     w: false, a: false, s: false, d: false,
     space: false, shift: false, ctrl: false
 };
-let keyLocks = { e: false, b: false }; // 锁定 E 键和 B 键，防止连击
+let keyLocks = { e: false, b: false }; // 新增 B 键锁定
 
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3, NOTEBOOK: 4 };
 let currentState = STATE.MENU;
@@ -67,7 +67,7 @@ let isLocked = false;
 
 const houses = [];
 
-// 新增变量：背包状态、地图状态、笔记本状态、选中物品
+// ✅ 新增变量：背包状态、地图状态、笔记本状态、选中物品
 let inventoryOpen = false;
 let mapVisible = false;
 let notebookOpen = false;
@@ -101,7 +101,7 @@ function init() {
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('wheel', onWheel); // 新增：监听鼠标滚轮
+    document.addEventListener('wheel', onWheel); // ✅ 新增：监听鼠标滚轮
     
     renderer.domElement.addEventListener('click', () => {
         if (currentState === STATE.PLAYING && !isLocked) {
@@ -257,8 +257,7 @@ function createCrosshair() {
     ctx.moveTo(40,32); ctx.lineTo(48,32);
     ctx.stroke();
     const tex = new THREE.CanvasTexture(cvs);
-    // ✅ 修复：移除 renderOrder 属性
-    const mat = new THREE.SpriteMaterial({map:tex, depthTest:false, depthWrite:false, toneMapped:false});
+    const mat = new THREE.SpriteMaterial({map:tex, depthTest:false, depthWrite:false, renderOrder:9999, toneMapped:false});
     crosshair = new THREE.Sprite(mat);
     crosshair.scale.set(0.5,0.5,1);
     scene.add(crosshair);
@@ -421,40 +420,6 @@ function getStairHeightRobust(x, z, hx, hz) {
 // ==========================================
 // 7. 渲染与 UI
 // ==========================================
-
-// ✅ 新增：修复后的 drawOverlay 函数
-function drawOverlay(title, buttons) {
-    const container = document.createElement('div');
-    Object.assign(container.style, {
-        position: 'absolute',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        background: 'rgba(0,0,0,0.8)',
-        color: '#FFF',
-        padding: '30px',
-        borderRadius: '10px',
-        border: '2px solid #FFD700',
-        textAlign: 'center',
-        fontSize: '18px',
-        pointerEvents: 'auto'
-    });
-    
-    container.innerHTML = `<h2 style="color:#FFD700">${title}</h2>`;
-    
-    buttons.forEach(btn => {
-        const b = document.createElement('button');
-        b.innerText = btn.txt;
-        b.style = 'margin:10px; padding:10px 20px; font-size:16px; background:#FFAA00; color:#000; border:none; cursor:pointer; border-radius:5px;';
-        b.onclick = () => {
-            if (btn.act) btn.act();
-        };
-        container.appendChild(b);
-    });
-
-    uiContainer.appendChild(container);
-}
-
 function createUI() {
     uiContainer = document.createElement('div');
     Object.assign(uiContainer.style, {
@@ -463,7 +428,7 @@ function createUI() {
     });
     document.body.appendChild(uiContainer);
 
-    // 创建右上角地图 (P键开关)
+    // ✅ 创建右上角地图 (P键开关)
     const mapEl = document.createElement('div');
     mapEl.id = 'map-ui';
     Object.assign(mapEl.style, {
@@ -477,7 +442,7 @@ function createUI() {
     mapEl.appendChild(mapDot);
     document.body.appendChild(mapEl);
 
-    // 创建左下角物品显示
+    // ✅ 创建左下角物品显示
     const itemEl = document.createElement('div');
     itemEl.id = 'item-ui';
     Object.assign(itemEl.style, {
@@ -487,7 +452,7 @@ function createUI() {
     });
     document.body.appendChild(itemEl);
 
-    // 创建笔记本 (B键开关)
+    // ✅ 创建笔记本 (B键开关)
     const notebookEl = document.createElement('div');
     notebookEl.id = 'notebook-ui';
     Object.assign(notebookEl.style, {
@@ -697,7 +662,7 @@ function onKeyUp(e) {
     if (code === 'KeyB') keyLocks.b = false;
 }
 
-// 新增：鼠标滚轮切换物品
+// ✅ 新增：鼠标滚轮切换物品
 function onWheel(e) {
     if (currentState !== STATE.PLAYING) return;
 
@@ -792,17 +757,4 @@ function animate() {
     
     // 每一帧都更新 UI 状态 (地图点位置、物品显示)
     updateInventoryUI();
-}
-
-// ==========================================
-// 11. 可视性更新 (新增)
-// ==========================================
-function updateVisibility() {
-    // 根据玩家位置动态显示或隐藏房屋，以优化性能
-    const viewDistance = 300;
-    for (const h of houses) {
-        const distance = player.pos.distanceTo(new THREE.Vector3(h.x, 0, h.z));
-        h.mesh.visible = distance < viewDistance;
-        h.doorMesh.visible = distance < viewDistance;
-    }
 }
