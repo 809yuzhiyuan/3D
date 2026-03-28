@@ -188,7 +188,8 @@ function createWorld() {
             x, z,
             minX: x - CONFIG.w/2, maxX: x + CONFIG.w/2,
             minZ: z - CONFIG.d/2, maxZ: z + CONFIG.d/2,
-            mesh: null, doorMesh: null
+            mesh: null, doorMesh: null,
+            hasChest: false // 新增：标识是否有箱子
         };
 
         const mesh = new THREE.LineSegments(houseGeoCache, new THREE.LineBasicMaterial({ 
@@ -214,6 +215,7 @@ function createWorld() {
     if (houses.length > 0) {
         chestHouseIndex = 0;
         const chestHouse = houses[chestHouseIndex];
+        chestHouse.hasChest = true; // 标记这栋房子有箱子
         player.pos.set(chestHouse.x, CONFIG.heightStand, chestHouse.z - 20); // 在房子内偏移一点
     }
 }
@@ -970,7 +972,13 @@ function drawBothInterfaces() {
 
 function startGame() {
     currentState = STATE.PLAYING;
-    player.pos.set(0, 2, 0);
+    // 将玩家出生位置设置为有箱子的房子
+    if (chestHouseIndex !== -1) {
+        const chestHouse = houses[chestHouseIndex];
+        player.pos.set(chestHouse.x, CONFIG.heightStand, chestHouse.z - 20); // 在房子内偏移一点
+    } else {
+        player.pos.set(0, 2, 0); // 如果没有找到有箱子的房子，则使用默认位置
+    }
     player.vel.set(0,0,0);
     player.yaw = 0;
     updateUI();
