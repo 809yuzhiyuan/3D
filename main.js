@@ -71,15 +71,19 @@ const keys = {
 // 修复：移除E键锁定，保留其他
 let keyLocks = { o: false, b: false };
 
-const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
+const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3, CHEST: 4, BOTH: 5 };
 let currentState = STATE.MENU;
 let isLocked = false;
 
 const houses = [];
 
 // 新增：物品系统变量
-const ITEMS = ["撬棍", "胶带", "钥匙", "地图", "照片", "打火机", "纸条", "收音机", "空位"];
+const ITEMS = ["空", "空", "空", "空", "空", "空", "空", "空", "空", "空"]; // 10个空位
 let currentItemIndex = 0;
+
+// 新增：箱子系统
+let chestHouseIndex = -1; // 存储有箱子的房子索引
+const CHEST_ITEMS = ["信件"]; // 箱子里的物品
 
 // ==========================================
 // 3. 初始化
@@ -115,6 +119,23 @@ function init() {
     renderer.domElement.addEventListener('click', () => {
         if (currentState === STATE.PLAYING && !isLocked) {
             renderer.domElement.requestPointerLock();
+        }
+    });
+
+    // 新增：右键打开箱子
+    renderer.domElement.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); // 阻止右键菜单
+        if (currentState === STATE.PLAYING) {
+            // 检查玩家是否靠近有箱子的房子
+            if (chestHouseIndex !== -1) {
+                const chestHouse = houses[chestHouseIndex];
+                const dist = Math.sqrt((player.pos.x - chestHouse.x)**2 + (player.pos.z - chestHouse.z)**2);
+                if (dist < 100) { // 在一定距离内才能打开箱子
+                    currentState = STATE.CHEST;
+                    document.exitPointerLock();
+                    updateUI();
+                }
+            }
         }
     });
 
@@ -188,6 +209,13 @@ function createWorld() {
 
         houses.push(house);
     }
+    
+    // 设置第一个房子作为有箱子的房子，并移动玩家到此房子内
+    if (houses.length > 0) {
+        chestHouseIndex = 0;
+        const chestHouse = houses[chestHouseIndex];
+        player.pos.set(chestHouse.x, CONFIG.heightStand, chestHouse.z - 20); // 在房子内偏移一点
+    }
 }
 
 function createHouseGeometry() {
@@ -212,28 +240,41 @@ function createHouseGeometry() {
         for(let k=-hd; k<=hd; k+=20) addLine(-hw, y, k, hw, y, k);
     }
 
-    const sx = -hw + 10, sz = hd - 5;
-    let cx = sx, cz = sz, cy = -hh;
-    let dir = -1;
-    const steps = 10;
-    const stepH = CONFIG.floorH/steps;
-    const stepD = 40/steps;
+    // 楼梯几何体修复：使用更精确的计算
+    const stairHeightPerStep = CONFIG.floorH / 10;
+    const stairDepthPerStep = 4;
+    const totalStairHeight = CONFIG.h - CONFIG.floorH; // 总爬升高度
+    const numSteps = Math.floor(totalStairHeight / stairHeightPerStep);
     
-    for(let f=0; f<CONFIG.h/CONFIG.floorH - 1; f++) {
-        for(let s=0; s<steps; s++) {
-            const ny = cy + stepH;
-            const nz = cz + stepD*dir;
-            points.push(cx-6, ny, nz, cx+6, ny, nz);
-            points.push(cx, cy, nz, cx, ny, nz);
-            cy = ny; cz = nz;
-        }
-        const pz = cz + 5*dir;
-        addLine(cx-6, cy, cz, cx+6, cy, pz);
-        addLine(cx-6, cy, cz, cx-6, cy, pz);
-        addLine(cx+6, cy, cz, cx+6, cy, pz);
+    // 创建楼梯路径
+    let currentX = -hw + 10;
+    let currentY = 0;
+    let currentZ = hd - 5;
+    let direction = -1; // -1 表示向负Z方向
+    
+    for (let step = 0; step < numSteps; step++) {
+        const nextY = currentY + stairHeightPerStep;
+        const nextZ = currentZ + stairDepthPerStep * direction;
         
-        dir *= -1;
-        cz = pz + 5*dir;
+        // 绘制台阶的水平面
+        points.push(currentX - 6, currentY, currentZ, currentX + 6, currentY, currentZ);
+        points.push(currentX - 6, currentY, currentZ, currentX - 6, nextY, currentZ);
+        points.push(currentX + 6, currentY, currentZ, currentX + 6, nextY, currentZ);
+        
+        // 绘制台阶的垂直面
+        points.push(currentX - 6, nextY, currentZ, currentX + 6, nextY, currentZ);
+        points.push(currentX - 6, nextY, currentZ, currentX - 6, nextY, nextZ);
+        points.push(currentX + 6, nextY, currentZ, currentX + 6, nextY, nextZ);
+        
+        // 更新位置
+        currentY = nextY;
+        currentZ = nextZ;
+        
+        // 每10步改变方向
+        if ((step + 1) % 10 === 0) {
+            direction *= -1; // 改变方向
+            currentZ += 10 * direction; // 移动到下一个平台
+        }
     }
 
     return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
@@ -401,22 +442,35 @@ function checkGroundAndStairs() {
 }
 
 function getStairHeightRobust(x, z, hx, hz) {
-    const hw = CONFIG.w/2, hd = CONFIG.d/2;
-    const sx = hx - hw + 10;
-    const szStart = hz + hd - 5;
+    const hw = CONFIG.w/2;
+    const hd = CONFIG.d/2;
+    const stairStartX = hx - hw + 10;
+    const stairStartZ = hz + hd - 5;
     
-    const stairWidth = 14;
-    if (x < sx - stairWidth/2 || x > sx + stairWidth/2) return null;
+    const stairWidth = 12; // 楼梯宽度
+    if (x < stairStartX - stairWidth/2 || x > stairStartX + stairWidth/2) return null;
     
-    const distZ = szStart - z;
+    // 计算楼梯的高度，考虑方向变化
+    const totalStairHeight = CONFIG.h - CONFIG.floorH;
+    const totalStairLength = 80; // 预设楼梯总长度
     
-    if (distZ > -5 && distZ < 85) {
-        let h = (distZ / 80) * CONFIG.h;
+    // 计算从楼梯起点到当前位置的距离
+    const distFromStart = Math.abs(stairStartZ - z);
+    
+    if (distFromStart >= 0 && distFromStart <= totalStairLength) {
+        // 根据位置计算高度
+        const ratio = distFromStart / totalStairLength;
+        const h = ratio * totalStairHeight;
         
-        if (h < 0) h = 0;
-        if (h > CONFIG.h) h = CONFIG.h;
+        // 考虑楼梯的折返设计
+        const floorIndex = Math.floor(distFromStart / 10); // 每10单位一个楼层
+        const withinFloorPos = distFromStart % 10;
         
-        return h;
+        if (floorIndex % 2 === 1) { // 奇数楼层反向
+            return (floorIndex * CONFIG.floorH) + (withinFloorPos / 10) * CONFIG.floorH;
+        } else {
+            return (floorIndex * CONFIG.floorH) + (withinFloorPos / 10) * CONFIG.floorH;
+        }
     }
     
     return null;
@@ -483,6 +537,8 @@ function onKeyDown(e) {
         } else if (currentState === STATE.INV) {
             currentState = STATE.PLAYING;
             setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+        } else if (currentState === STATE.BOTH) {
+            currentState = STATE.CHEST;
         }
         updateUI(); // 确保UI同步更新
         e.preventDefault(); // 阻止默认行为
@@ -518,6 +574,15 @@ function onKeyDown(e) {
             currentState = STATE.PLAYING;
             setTimeout(() => renderer.domElement.requestPointerLock(), 50);
             updateUI();
+        } else if (currentState === STATE.CHEST) {
+            // ESC在箱子中关闭箱子
+            currentState = STATE.PLAYING;
+            setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+            updateUI();
+        } else if (currentState === STATE.BOTH) {
+            // ESC在双界面中关闭到仅背包
+            currentState = STATE.INV;
+            updateUI();
         } else if (currentState === STATE.PLAYING) {
             currentState = STATE.PAUSED;
             document.exitPointerLock();
@@ -534,6 +599,7 @@ function onKeyUp(e) {
     if (code === 'KeyW') keys.w = false;
     if (code === 'KeyS') keys.s = false;
     if (code === 'KeyA') keys.a = false;
+    if (code === 'KeyD') keys.a = false;
     if (code === 'KeyD') keys.d = false;
     if (code === 'Space') keys.space = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = false;
@@ -545,7 +611,7 @@ function onKeyUp(e) {
 
 // 🔧 新增：滚动物品
 function onWheel(e) {
-    if (currentState !== STATE.PLAYING && currentState !== STATE.INV) return;
+    if (currentState !== STATE.PLAYING && currentState !== STATE.INV && currentState !== STATE.BOTH) return;
     
     if (e.deltaY < 0) {
         // 向上滚动，选择前一个
@@ -678,10 +744,10 @@ function toggleNotebook() {
 
 function updateUI() {
     uiContainer.innerHTML = '';
-    uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
+    uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV || currentState === STATE.CHEST || currentState === STATE.BOTH) ? 'auto' : 'none';
 
     // 新增：左下角物品显示
-    if (currentState === STATE.PLAYING || currentState === STATE.INV) {
+    if (currentState === STATE.PLAYING || currentState === STATE.INV || currentState === STATE.BOTH) {
         const itemInfo = document.createElement('div');
         Object.assign(itemInfo.style, {
             position:'absolute', 
@@ -695,13 +761,15 @@ function updateUI() {
             borderRadius: '4px'
         });
         
-        // 显示当前物品
-        itemInfo.innerHTML = `当前物品: ${ITEMS[currentItemIndex]}`;
+        // 显示当前物品，如果是空则显示"无"
+        const currentItem = ITEMS[currentItemIndex];
+        const displayText = currentItem === "空" ? "无" : currentItem;
+        itemInfo.innerHTML = `当前物品: ${displayText}`;
         uiContainer.appendChild(itemInfo);
     }
 
     // 原来的顶部信息显示
-    if (currentState === STATE.PLAYING || currentState === STATE.INV) {
+    if (currentState === STATE.PLAYING || currentState === STATE.INV || currentState === STATE.BOTH) {
         let dirStr = "静止";
         if (keys.w) dirStr = "前进 ↑";
         if (keys.s) dirStr = "后退 ↓";
@@ -743,6 +811,12 @@ function updateUI() {
     } else if (currentState === STATE.INV) {
         uiContainer.style.background = 'rgba(0,0,0,0.85)';
         drawInventory();
+    } else if (currentState === STATE.CHEST) {
+        uiContainer.style.background = 'rgba(0,0,0,0.85)';
+        drawChest();
+    } else if (currentState === STATE.BOTH) {
+        uiContainer.style.background = 'rgba(0,0,0,0.85)';
+        drawBothInterfaces();
     }
 }
 
@@ -786,10 +860,112 @@ function drawInventory() {
             cursor:'pointer', fontSize:'14px'
         });
         s.innerHTML = `<div>${n}</div><div style='font-size:10px; margin-top:5px'>[${i+1}]</div>`;
+        s.onclick = () => {
+            currentItemIndex = i;
+            updateUI();
+        };
         box.appendChild(s);
     });
     uiContainer.appendChild(box);
     uiContainer.onclick = (e) => { if(e.target===uiContainer) toggleInventory(); };
+}
+
+function drawChest() {
+    const box = document.createElement('div');
+    Object.assign(box.style, {
+        position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
+        width:'400px', minHeight:'300px', border:'2px solid #FFA500', background:'rgba(50,30,10,0.9)',
+        padding:'20px', display:'flex', flexWrap:'wrap'
+    });
+    box.innerHTML = `<div style="width:100%;color:#FFA500;font-size:24px;margin-bottom:20px">箱子 (按 E 打开背包)</div>`;
+    
+    CHEST_ITEMS.forEach((n, i) => {
+        const s = document.createElement('div');
+        Object.assign(s.style, {
+            width:'70px', height:'70px', margin:'10px', border:'1px solid #555',
+            background:'#331', color:'#A85',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            cursor:'pointer', fontSize:'14px'
+        });
+        s.innerHTML = `<div>${n}</div><div style='font-size:10px; margin-top:5px'>[R]</div>`;
+        s.onclick = () => {
+            // 将箱子中的物品转移到背包中
+            // 寻找背包中第一个空位
+            const emptySlotIndex = ITEMS.findIndex(item => item === "空");
+            if (emptySlotIndex !== -1) {
+                ITEMS[emptySlotIndex] = n; // 将物品放入空位
+                CHEST_ITEMS.splice(i, 1); // 从箱子中移除物品
+                updateUI(); // 更新UI
+            }
+        };
+        box.appendChild(s);
+    });
+    uiContainer.appendChild(box);
+}
+
+function drawBothInterfaces() {
+    // 创建背包界面
+    const invBox = document.createElement('div');
+    Object.assign(invBox.style, {
+        position:'absolute', top:'60%', left:'50%', transform:'translate(-50%,-50%)',
+        width:'600px', minHeight:'200px', border:'2px solid #FFD700', background:'rgba(20,20,20,0.9)',
+        padding:'20px', display:'flex', flexWrap:'wrap'
+    });
+    invBox.innerHTML = `<div style="width:100%;color:#FFD700;font-size:20px;margin-bottom:10px;text-align:center">背包 (按 E 返回箱子)</div>`;
+    
+    ITEMS.forEach((n, i) => {
+        const s = document.createElement('div');
+        const sel = (i === currentItemIndex); // 高亮当前选中物品
+        Object.assign(s.style, {
+            width:'60px', height:'60px', margin:'5px', border: sel?'2px solid #FFF':'1px solid #555',
+            background: sel?'#333':'#111', color: sel?'#FFF':'#888',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            cursor:'pointer', fontSize:'12px'
+        });
+        s.innerHTML = `<div>${n}</div><div style='font-size:8px; margin-top:2px'>[${i+1}]</div>`;
+        s.onclick = () => {
+            currentItemIndex = i;
+            updateUI();
+        };
+        invBox.appendChild(s);
+    });
+    uiContainer.appendChild(invBox);
+    
+    // 创建箱子界面
+    const chestBox = document.createElement('div');
+    Object.assign(chestBox.style, {
+        position:'absolute', top:'30%', left:'50%', transform:'translate(-50%,-50%)',
+        width:'400px', minHeight:'200px', border:'2px solid #FFA500', background:'rgba(50,30,10,0.9)',
+        padding:'20px', display:'flex', flexWrap:'wrap'
+    });
+    chestBox.innerHTML = `<div style="width:100%;color:#FFA500;font-size:20px;margin-bottom:10px;text-align:center">箱子 (点击物品拖入背包)</div>`;
+    
+    CHEST_ITEMS.forEach((n, i) => {
+        const s = document.createElement('div');
+        Object.assign(s.style, {
+            width:'60px', height:'60px', margin:'5px', border:'1px solid #555',
+            background:'#331', color:'#A85',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            cursor:'pointer', fontSize:'12px'
+        });
+        s.innerHTML = `<div>${n}</div><div style='font-size:8px; margin-top:2px'>[R]</div>`;
+        s.onclick = () => {
+            // 将箱子中的物品转移到背包中
+            // 寻找背包中第一个空位
+            const emptySlotIndex = ITEMS.findIndex(item => item === "空");
+            if (emptySlotIndex !== -1) {
+                ITEMS[emptySlotIndex] = n; // 将物品放入空位
+                CHEST_ITEMS.splice(i, 1); // 从箱子中移除物品
+                if (CHEST_ITEMS.length === 0) {
+                    // 如果箱子空了，回到仅背包界面
+                    currentState = STATE.INV;
+                }
+                updateUI(); // 更新UI
+            }
+        };
+        chestBox.appendChild(s);
+    });
+    uiContainer.appendChild(chestBox);
 }
 
 function startGame() {
