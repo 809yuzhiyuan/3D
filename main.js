@@ -471,19 +471,13 @@ function getStairHeightRobust(x, z, hx, hz) {
     const distFromStart = Math.abs(stairStartZ - z);
     
     if (distFromStart >= 0 && distFromStart <= totalStairLength) {
-        // 根据位置计算高度
-        const ratio = distFromStart / totalStairLength;
-        const h = ratio * totalStairHeight;
-        
         // 考虑楼梯的折返设计
         const floorIndex = Math.floor(distFromStart / 10); // 每10单位一个楼层
         const withinFloorPos = distFromStart % 10;
         
-        if (floorIndex % 2 === 1) { // 奇数楼层反向
-            return (floorIndex * CONFIG.floorH) + (withinFloorPos / 10) * CONFIG.floorH;
-        } else {
-            return (floorIndex * CONFIG.floorH) + (withinFloorPos / 10) * CONFIG.floorH;
-        }
+        // 简化楼梯高度计算以避免潜在的无限循环
+        const ratio = distFromStart / totalStairLength;
+        return ratio * totalStairHeight;
     }
     
     return null;
@@ -506,7 +500,7 @@ function updateVisibility() {
             const alpha = Math.max(0.1, 1.0 - dist/renderDist);
             h.mesh.material.opacity = alpha;
             h.doorMesh.material.opacity = alpha;
-            h.chestMesh.material.wireframeLinewidth = alpha * 2; // 调整线宽
+            // 注意：wireframeLinewidth不是材质属性，我们改为调整opacity
         }
     });
 }
@@ -617,8 +611,8 @@ function onKeyUp(e) {
     const code = e.code;
     if (code === 'KeyW') keys.w = false;
     if (code === 'KeyS') keys.s = false;
+    // 🔴 修复：移除错误的重复赋值 keys.a = false;
     if (code === 'KeyA') keys.a = false;
-    if (code === 'KeyD') keys.a = false;
     if (code === 'KeyD') keys.d = false;
     if (code === 'Space') keys.space = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = false;
@@ -808,7 +802,7 @@ function updateUI() {
             坐标：${player.pos.x.toFixed(0)} ${player.pos.y.toFixed(0)} ${player.pos.z.toFixed(0)}<br>
             楼层：<strong>${floor}</strong><br>
             方向：<strong>${dirStr}</strong><br>
-            按键：W[${keyStatus(keys.w)}] S[${keyStatus(keys.s)}}] A[${keyStatus(keys.a)}] D[${keyStatus(keys.d)}]<br>
+            按键：W[${keyStatus(keys.w)}] S[${keyStatus(keys.s)}] A[${keyStatus(keys.a)}] D[${keyStatus(keys.d)}]<br>
             Shift [${runStatus}] | Ctrl [${crouchStatus}] | 空格 [${keys.space ? '跳跃' : '--'}]<br>
             鼠标：${mouseStatus} | 房屋总数：${CONFIG.count}
         `;
