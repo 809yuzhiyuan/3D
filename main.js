@@ -75,11 +75,6 @@ let isLocked = false;
 
 const houses = [];
 
-// 新增：3D UI 元素
-let mapPlane = null;      // 3D 地图平面
-let notebookPlane = null; // 3D 笔记本平面
-let notebookText = "";    // 存储笔记本的文字内容
-
 // ==========================================
 // 3. 初始化 (✅ 修复黑屏问题)
 // ==========================================
@@ -102,8 +97,6 @@ function init() {
 
     createWorld();
     createCrosshair();
-    createMapUI();      // ✅ 添加
-    createNotebookUI(); // ✅ 添加
     createUI(); // UI创建放在最后，确保所有变量已声明
 
     window.addEventListener('resize', onResize);
@@ -481,14 +474,6 @@ function animate() {
         crosshair.position.add(dir.multiplyScalar(1));
     }
 
-    // ✅ 更新 3D UI
-    if (mapPlane && mapPlane.userData.update) {
-        mapPlane.userData.update(player.pos);
-    }
-    if (notebookPlane && notebookPlane.userData.update && notebookPlane.visible) {
-        notebookPlane.userData.update();
-    }
-
     updateVisibility();
     
     // 每一帧都强制渲染，解决黑屏问题
@@ -531,25 +516,13 @@ function onKeyDown(e) {
     // 🔧 功能3：P键开关地图
     if (code === 'KeyP') {
         mapVisible = !mapVisible;
-        if (mapPlane) mapPlane.visible = mapVisible;
+        mapUI.style.display = mapVisible ? 'block' : 'none';
     }
     
     // 🔧 功能4：B键开关笔记本
-    if (code === 'KeyB') {
-        if (currentState === STATE.PLAYING) {
-            // 1. 暂停游戏
-            currentState = STATE.PAUSED; 
-            document.exitPointerLock();
-            
-            // 2. 显示笔记本 (移动到玩家面前)
-            notebookPlane.position.copy(player.pos);
-            notebookPlane.position.y += CONFIG.heightStand / 2;
-            notebookPlane.position.z -= 2; // 放在玩家面前
-            notebookPlane.visible = true;
-            
-            // 3. 调用输入框
-            notebookPlane.userData.showInput();
-        }
+    if (code === 'KeyB' && !keyLocks.b) {
+        toggleNotebook();
+        keyLocks.b = true;
     }
 
     if (code === 'Escape') {
@@ -609,193 +582,6 @@ function onResize() {
 // ==========================================
 // 8. UI 系统
 // ==========================================
-
-// ✅ 新增函数：创建 3D 地图
-function createMapUI() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256; // 地图纹理宽度
-    canvas.height = 256; // 地图纹理高度
-    const ctx = canvas.getContext('2d');
-
-    // 1. 绘制地图背景 (网格)
-    function drawMapBackground() {
-        // 清空为半透明黑色背景
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // 绘制网格线 (模拟雷达网格)
-        ctx.strokeStyle = '#00FFFF';
-        ctx.lineWidth = 1;
-        const step = 25;
-        for (let i = 0; i < canvas.width; i += step) {
-            ctx.beginPath();
-            ctx.moveTo(i, 0);
-            ctx.lineTo(i, canvas.height);
-            ctx.stroke();
-            
-            ctx.beginPath();
-            ctx.moveTo(0, i);
-            ctx.lineTo(canvas.width, i);
-            ctx.stroke();
-        }
-    }
-
-    drawMapBackground();
-
-    // 2. 创建纹理和材质
-    const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.MeshBasicMaterial({ 
-        map: texture, 
-        transparent: true,
-        depthTest: false, // 让地图始终可见，不被物体遮挡
-        depthWrite: false,
-        side: THREE.DoubleSide
-    });
-
-    // 3. 创建平面几何体
-    const geometry = new THREE.PlaneGeometry(10, 10); // 3D 尺寸
-    mapPlane = new THREE.Mesh(geometry, material);
-    
-    // 4. 设置地图位置 (悬浮在场景右上角)
-    mapPlane.position.set(40, 20, 40); // X, Y, Z
-    mapPlane.rotation.x = -Math.PI / 3; // 倾斜角度，方便观看
-    mapPlane.visible = false; // 初始隐藏
-    
-    scene.add(mapPlane);
-    
-    // ✅ 挂载绘制函数到地图对象上，方便在动画中调用
-    mapPlane.userData.update = function(playerPos) {
-        // 重绘背景
-        drawMapBackground();
-        
-        // ✅ 核心：根据玩家位置计算地图上的像素点
-        // 假设以地图中心为原点 (0,0)，每 100 单位长度对应 100 像素
-        const scale = 2; // 缩放系数，场景单位转像素
-        let px = (playerPos.x / scale) + canvas.width / 2;
-        let py = (playerPos.z / scale) + canvas.height / 2;
-
-        // 边界限制
-        px = Math.max(5, Math.min(canvas.width - 5, px));
-        py = Math.max(5, Math.min(canvas.height - 5, py));
-
-        // 绘制玩家位置 (红点)
-        ctx.fillStyle = 'red';
-        ctx.beginPath();
-        ctx.arc(px, py, 6, 0, Math.PI * 2); // 圆心 px, py, 半径 6
-        ctx.fill();
-
-        // 绘制玩家朝向 (三角形)
-        ctx.fillStyle = 'yellow';
-        const angle = player.yaw; // 使用玩家的偏航角
-        const triangleSize = 8;
-        const x1 = px + triangleSize * Math.cos(angle);
-        const y1 = py + triangleSize * Math.sin(angle);
-        const x2 = px + triangleSize * Math.cos(angle + 2.5);
-        const y2 = py + triangleSize * Math.sin(angle + 2.5);
-        const x3 = px + triangleSize * Math.cos(angle - 2.5);
-        const y3 = py + triangleSize * Math.sin(angle - 2.5);
-        
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.lineTo(x3, y3);
-        ctx.closePath();
-        ctx.fill();
-
-        // 更新纹理
-        texture.needsUpdate = true;
-    };
-}
-
-// ✅ 新增函数：创建 3D 笔记本
-function createNotebookUI() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 384;
-    const ctx = canvas.getContext('2d');
-
-    // 1. 绘制笔记本背景 (羊皮纸风格)
-    function drawNotebookBackground() {
-        // 米黄色背景
-        ctx.fillStyle = '#F5F5DC';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // 绘制行线
-        ctx.strokeStyle = '#DDD';
-        ctx.lineWidth = 1;
-        for (let i = 40; i < canvas.height; i += 30) {
-            ctx.beginPath();
-            ctx.moveTo(40, i);
-            ctx.lineTo(canvas.width - 40, i);
-            ctx.stroke();
-        }
-        
-        // 左侧装订孔
-        ctx.fillStyle = '#333';
-        for (let i = 0; i < 4; i++) {
-            ctx.beginPath();
-            ctx.arc(20, 60 + i * 100, 8, 0, Math.PI * 2);
-            ctx.fill();
-        }
-    }
-
-    drawNotebookBackground();
-
-    // 2. 创建材质和网格
-    const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.MeshBasicMaterial({ 
-        map: texture, 
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
-        side: THREE.DoubleSide
-    });
-
-    const geometry = new THREE.PlaneGeometry(15, 11); // 3D 尺寸
-    notebookPlane = new THREE.Mesh(geometry, material);
-    
-    // 初始隐藏在场景外
-    notebookPlane.position.set(1000, 1000, 1000); 
-    notebookPlane.visible = false;
-    
-    scene.add(notebookPlane);
-
-    // ✅ 挂载更新函数
-    notebookPlane.userData.update = function() {
-        drawNotebookBackground();
-        
-        // 显示提示文字
-        ctx.fillStyle = '#333';
-        ctx.font = '20px Georgia';
-        ctx.fillText('按 B 键输入笔记内容:', 50, 50);
-        
-        // 显示存储的笔记内容
-        ctx.font = '24px Georgia';
-        ctx.fillStyle = '#000';
-        // 换行处理
-        const lines = notebookText.split('\n');
-        lines.forEach((line, index) => {
-            ctx.fillText(line, 50, 100 + index * 30);
-        });
-
-        ctx.fillText('-- 按 B 键保存并关闭 --', 50, canvas.height - 50);
-        
-        texture.needsUpdate = true;
-    };
-
-    // ✅ 挂载输入框模拟 (使用浏览器原生 prompt，因为纯 JS 无法监听键盘输入到字符串)
-    // 注意：在实际游戏中，你可能需要一个状态机来处理输入
-    notebookPlane.userData.showInput = function() {
-        const input = prompt("📝 写下你的笔记:", notebookText);
-        if (input !== null) { // 用户点击了确定
-            notebookText = input; // 更新笔记内容
-        }
-        this.visible = false; // 隐藏笔记本
-        currentState = STATE.PLAYING; // 恢复游戏状态
-        renderer.domElement.requestPointerLock(); // 重新锁定鼠标
-    };
-}
-
 function createUI() {
     uiContainer = document.createElement('div');
     Object.assign(uiContainer.style, {
@@ -804,11 +590,104 @@ function createUI() {
     });
     document.body.appendChild(uiContainer);
     
-    // 注释掉原来的 DOM UI 创建
-    // createMapUI();
-    // createNotebookUI();
+    // ✅ 新增：创建地图 UI (右上角)
+    createMapUI();
+    
+    // ✅ 新增：创建笔记本 UI (按下 B 键显示)
+    createNotebookUI();
     
     updateUI();
+}
+
+// ✅ 新增函数：创建地图 UI
+function createMapUI() {
+    mapUI = document.createElement('div');
+    Object.assign(mapUI.style, {
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        width: '150px',
+        height: '150px',
+        backgroundColor: 'rgba(0,0,0,0.7)',
+        border: '2px solid #00FFFF',
+        display: mapVisible ? 'block' : 'none', // 初始隐藏
+        pointerEvents: 'none',
+        overflow: 'hidden'
+    });
+    
+    // 地图背景网格
+    const mapGrid = document.createElement('div');
+    Object.assign(mapGrid.style, {
+        width: '100%',
+        height: '100%',
+        backgroundImage: 'radial-gradient(circle, transparent 1px, #00FFFF 1px)',
+        backgroundSize: '10px 10px'
+    });
+    mapUI.appendChild(mapGrid);
+    
+    // 玩家位置点
+    mapDot = document.createElement('div');
+    Object.assign(mapDot.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        width: '8px',
+        height: '8px',
+        backgroundColor: '#FF0000',
+        borderRadius: '50%',
+        transform: 'translate(-50%, -50%)'
+    });
+    mapUI.appendChild(mapDot);
+    
+    document.body.appendChild(mapUI);
+}
+
+// ✅ 新增函数：创建笔记本 UI
+function createNotebookUI() {
+    notebookEl = document.createElement('div');
+    Object.assign(notebookEl.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '600px',
+        height: '400px',
+        backgroundColor: '#222',
+        border: '2px solid #FFD700',
+        color: '#FFF',
+        padding: '20px',
+        display: 'none', // 初始隐藏
+        pointerEvents: 'auto',
+        overflow: 'auto',
+        fontSize: '16px',
+        fontFamily: 'Georgia, serif',
+        zIndex: 1000
+    });
+    
+    notebookEl.innerHTML = `
+        <h2 style="color:#FFD700; margin-bottom: 10px;">📝 玩家笔记</h2>
+        <p style="line-height: 1.6;">
+            这里是你的游戏笔记。你可以记录线索、任务目标或任何你想记住的信息。<br><br>
+            <strong>提示：</strong> 按 <strong>B</strong> 键关闭。
+        </p>
+    `;
+    
+    document.body.appendChild(notebookEl);
+}
+
+// ✅ 新增函数：开关笔记本
+function toggleNotebook() {
+    if (notebookEl.style.display === 'block') {
+        notebookEl.style.display = 'none';
+        // 恢复鼠标锁定（如果之前是锁定的）
+        if (currentState === STATE.PLAYING) {
+            setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+        }
+    } else {
+        notebookEl.style.display = 'block';
+        // 暂停游戏逻辑或解除锁定
+        document.exitPointerLock();
+    }
 }
 
 function updateUI() {
