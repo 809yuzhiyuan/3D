@@ -220,7 +220,7 @@ function createWorld() {
             const boxMaterial = new THREE.MeshBasicMaterial({ color: CONFIG.cBox });
             const boxMesh = new THREE.Mesh(boxGeometry, boxMaterial);
             // 放置在房间的角落 (-X, -Z)
-            const cornerOffset = CONFIG.w/2 - boxSize/2 - 10; // 距离墙壁2单位
+            const cornerOffset = CONFIG.w/2 - boxSize/10 - 50; // 距离墙壁2单位
             boxMesh.position.set(x - cornerOffset, CONFIG.floorH/2, z - cornerOffset); // <--- 修改这里
             scene.add(boxMesh);
             
