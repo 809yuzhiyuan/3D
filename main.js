@@ -22,6 +22,7 @@ const CONFIG = {
     gravity: 40.0,
     sensitivity: 0.002, 
     interactionDistance: 3.0, // 新增：交互距离
+    pickUpDistance: 2.0,      // 新增：拾取距离
 
     // 房子
     count: 200,
@@ -87,7 +88,7 @@ let currentState = STATE.MENU;
 let isLocked = false;
 
 const houses = [];
-let boxes = []; // 新增：箱子列表
+let boxes = []; // 修改：箱子列表，现在也包含拾取功能
 
 // 背包数据 (修改：清空初始物品)
 let playerInventory = Array(9).fill(null); // 9个空槽位
@@ -123,7 +124,7 @@ function init() {
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('mousemove', onMouseMove);
-    // 修改：左键用于拖拽，右键用于交互
+    // 修改：左键用于拖拽，右键用于交互/拾取
     renderer.domElement.addEventListener('mousedown', onMouseDown);
     renderer.domElement.addEventListener('mouseup', onMouseUp);
     
@@ -232,7 +233,8 @@ function createWorld() {
                 x: boxMesh.position.x,
                 y: boxMesh.position.y,
                 z: boxMesh.position.z,
-                size: boxSize / 2 // 半尺寸用于碰撞检测
+                size: boxSize / 2, // 半尺寸用于碰撞检测
+                interactable: true // 标记为可交互
             });
             
             // 初始化箱子库存，放入一封信
@@ -407,6 +409,7 @@ function checkCollision(pos) {
     }
     // 检查箱子碰撞
     for (const box of boxes) {
+        if(!box.interactable) continue; // 只检查可交互的箱子
         const dx = Math.abs(pos.x - box.x);
         const dz = Math.abs(pos.z - box.z);
         const dy = Math.abs(pos.y - box.y);
@@ -608,7 +611,7 @@ function onMouseDown(e) {
 
     if (e.button === 2) { // 右键
         if (!keyLocks.mouseRight) {
-            attemptInteract();
+            attemptInteractOrPickUp(); // 修改：调用新的函数
             keyLocks.mouseRight = true;
         }
     }
@@ -899,26 +902,71 @@ function createInventoryUI() {
     document.body.appendChild(inventoryUI);
 }
 
-// 新增：尝试与最近的物体交互
-function attemptInteract() {
-    let closestObj = null;
-    let closestDist = Infinity;
+// 修改：尝试与最近的物体交互或拾取
+function attemptInteractOrPickUp() {
+    let closestInteractable = null;
+    let closestPickup = null;
+    let closestInteractableDist = Infinity;
+    let closestPickupDist = Infinity;
 
-    // 检查是否靠近箱子
+    // 检查是否靠近箱子 (可交互)
     for (const box of boxes) {
+        if (!box.interactable) continue; // 只检查可交互的箱子
         const dx = player.pos.x - box.x;
         const dz = player.pos.z - box.z;
         const distSq = dx * dx + dz * dz;
-        if (distSq < CONFIG.interactionDistance * CONFIG.interactionDistance && distSq < closestDist) {
-            closestDist = distSq;
-            closestObj = box;
+        if (distSq < CONFIG.interactionDistance * CONFIG.interactionDistance && distSq < closestInteractableDist) {
+            closestInteractableDist = distSq;
+            closestInteractable = box;
         }
     }
 
-    if (closestObj) {
-        openInteractionUI(closestObj.id);
+    // 检查是否靠近可拾取物品 (这里暂时只考虑箱子本身作为可拾取物)
+    // 实际游戏中，拾取物可能是独立的实体，这里为了演示，我们让箱子本身也可以被“拾取”
+    // 但通常拾取物应该是更小的、非碰撞的物体，或者从箱子中取出的物品。
+    // 让我们重新定义：点击箱子，如果是空的且玩家背包有空间，可以“拾起”这个箱子实体。
+    // 但这不符合常理，且复杂度高。最简单的做法是：点击箱子，如果是空的，就移除它；如果有物品，就打开交互界面。
+    // 或者，我们可以添加一个新概念：“拾取物品”（如信件），它们独立于箱子存在。
+    // 为了演示拾取逻辑，我们暂时只处理与箱子的交互。
+    // --- 暂时先按原计划，点击箱子交互 ---
+    // 如果未来要实现真正的“拾取”功能，可以添加一个单独的数组存放可拾取物品。
+
+    // 检查箱子
+    if (closestInteractable) {
+        openInteractionUI(closestInteractable.id);
+        return; // 找到交互目标，返回
     }
+
+    // 如果没有可交互物体，尝试拾取 (此处可以扩展)
+    // 例如，检查是否有掉落物在玩家附近
+    // for(const pickup of pickups) { ... }
+    // 如果有拾取物且距离足够近，则执行拾取逻辑
+    // if(closestPickup) { pickUpItem(closestPickup); }
+
+    // 目前如果没有可交互物体，就不做任何事
+    console.log("没有找到可交互的物体"); // 临时调试信息
 }
+
+// 新增：拾取物品 (占位符)
+function pickUpItem(item) {
+    // 1. 寻找玩家背包中的空槽位
+    const emptyIndex = playerInventory.findIndex(slot => slot === null);
+    if (emptyIndex === -1) {
+        console.log("背包已满！");
+        return false; // 拾取失败
+    }
+
+    // 2. 将物品放入背包
+    playerInventory[emptyIndex] = {...item}; // 复制物品信息
+
+    // 3. 从场景中移除物品 (如果物品是独立的Mesh)
+    // scene.remove(item.mesh); // 假设有mesh属性
+    // item.mesh = undefined; // 清除引用
+
+    console.log(`拾取了: ${item.name}`);
+    return true; // 拾取成功
+}
+
 
 // 新增：打开交互UI
 function openInteractionUI(targetId) {
