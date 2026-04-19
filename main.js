@@ -21,6 +21,7 @@ const CONFIG = {
     jumpForce: 12.0,
     gravity: 40.0,
     sensitivity: 0.002, 
+    interactionDistance: 3.0, // 新增：交互距离
 
     // 房子
     count: 200,
@@ -35,7 +36,8 @@ const CONFIG = {
     cWall: 0xFFFFFF,
     cDoor: 0xFF0055,
     cGrid: 0x00FFFF,
-    cStair: 0xFFAA00
+    cStair: 0xFFAA00,
+    cBox: 0x8B4513 // 新增：箱子颜色 (棕色)
 };
 
 // ==========================================
@@ -57,10 +59,16 @@ let notebookContent = null;
 
 // 背包元素
 let inventoryUI = null;
-let selectedSlot = 0;
+let selectedSlot = -1; // 修改：初始无选中项
+
+// 交互UI元素
+let interactionUI = null; // 新增：交互UI容器
+let boxInventoryGrid = null; // 新增：箱子物品栏
+let playerInventoryGrid = null; // 新增：玩家物品栏
+let currentInteractionTarget = null; // 新增：当前交互目标（例如箱子）
 
 const player = {
-    pos: new THREE.Vector3(0, 2, 0),
+    pos: new THREE.Vector3(0, 2, 0), // 修改：初始位置将在出生房子里
     vel: new THREE.Vector3(0, 0, 0),
     yaw: 0,
     pitch: 0,
@@ -72,13 +80,19 @@ const keys = {
     w: false, a: false, s: false, d: false,
     space: false, shift: false, ctrl: false
 };
-let keyLocks = { e: false, o: false, b: false };
+let keyLocks = { e: false, o: false, b: false, mouseRight: false }; // 修改：新增鼠标右键锁定
 
-const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3 };
+const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, INV: 3, INTERACTING: 4 }; // 修改：新增INTERACTING状态
 let currentState = STATE.MENU;
 let isLocked = false;
 
 const houses = [];
+let boxes = []; // 新增：箱子列表
+
+// 背包数据 (修改：清空初始物品)
+let playerInventory = Array(9).fill(null); // 9个空槽位
+// 箱子数据 (修改：为出生房间箱子准备)
+let boxInventories = {}; // 使用对象存储不同箱子的内容
 
 // ==========================================
 // 3. 初始化
@@ -102,12 +116,16 @@ function init() {
 
     createWorld();
     createCrosshair();
-    createUI();
+    createUI(); // UI创建放在最后，确保所有变量已声明
+    createInteractionUI(); // 新增：创建交互UI
 
     window.addEventListener('resize', onResize);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     document.addEventListener('mousemove', onMouseMove);
+    // 修改：左键用于拖拽，右键用于交互
+    renderer.domElement.addEventListener('mousedown', onMouseDown);
+    renderer.domElement.addEventListener('mouseup', onMouseUp);
     
     renderer.domElement.addEventListener('click', () => {
         if (currentState === STATE.PLAYING && !isLocked) {
@@ -159,13 +177,16 @@ function createWorld() {
         const x = startX + col * CONFIG.spacing;
         const z = startZ + row * CONFIG.spacing;
         
-        if (Math.abs(x) < 60 && Math.abs(z) < 60) continue;
+        // 修改：不再跳过接近原点的房子，而是选择一个特定的作为出生点
+        // 假设第一个房子作为出生点，可以根据需要更改
+        const isSpawnHouse = i === 0; // 第一个生成的房子作为出生点
 
         const house = {
             x, z,
             minX: x - CONFIG.w/2, maxX: x + CONFIG.w/2,
             minZ: z - CONFIG.d/2, maxZ: z + CONFIG.d/2,
-            mesh: null, doorMesh: null
+            mesh: null, doorMesh: null,
+            isSpawn: isSpawnHouse // 新增标记
         };
 
         const mesh = new THREE.LineSegments(houseGeoCache, new THREE.LineBasicMaterial({ 
@@ -185,6 +206,40 @@ function createWorld() {
         house.doorMesh = doorMesh;
 
         houses.push(house);
+
+        // 如果是出生房子，设置玩家出生点并生成箱子
+        if (isSpawnHouse) {
+            // 设置玩家出生在房子里的中央，稍微高于地面
+            player.pos.set(x, CONFIG.floorH + CONFIG.heightStand, z);
+            // 确保玩家位置正确更新到相机
+            camera.position.copy(player.pos);
+            
+            // 在房间里生成一个箱子
+            const boxSize = 5; // 箱子大小
+            const boxGeometry = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
+            const boxMaterial = new THREE.MeshBasicMaterial({ color: CONFIG.cBox });
+            const boxMesh = new THREE.Mesh(boxGeometry, boxMaterial);
+            // 放置在房间内的某个位置，比如靠墙
+            boxMesh.position.set(x - CONFIG.w/2 + boxSize/2 + 2, CONFIG.floorH/2, z);
+            scene.add(boxMesh);
+            
+            // 存储箱子信息
+            const boxId = `box_${x}_${z}`;
+            boxes.push({
+                id: boxId,
+                mesh: boxMesh,
+                x: boxMesh.position.x,
+                y: boxMesh.position.y,
+                z: boxMesh.position.z,
+                size: boxSize / 2 // 半尺寸用于碰撞检测
+            });
+            
+            // 初始化箱子库存，放入一封信
+            boxInventories[boxId] = [
+                { name: "一封信", icon: "📜" },
+                null, null, null, null, null, null, null, null
+            ];
+        }
     }
 }
 
@@ -349,6 +404,15 @@ function checkCollision(pos) {
             if (pos.z <= minZ + r || pos.z >= maxZ - r) return true;
         }
     }
+    // 检查箱子碰撞
+    for (const box of boxes) {
+        const dx = Math.abs(pos.x - box.x);
+        const dz = Math.abs(pos.z - box.z);
+        const dy = Math.abs(pos.y - box.y);
+        if (dx < r + box.size && dz < r + box.size && dy < CONFIG.heightStand / 2 + box.size) {
+            return true; // 碰撞到箱子
+        }
+    }
     return false;
 }
 
@@ -469,10 +533,11 @@ function onKeyDown(e) {
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = true;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = true;
     
-    // E键：开关背包
-    if (code === 'KeyE' && !keyLocks.e) {
-        if (currentState === STATE.PLAYING) toggleInventory();
-        keyLocks.e = true;
+    // E键：现在仅用于关闭交互UI，不打开普通背包
+    if (code === 'KeyE') {
+         if (currentState === STATE.INTERACTING) {
+            closeInteractionUI();
+        }
     }
     
     // O键：暂停/继续
@@ -502,8 +567,10 @@ function onKeyDown(e) {
     }
 
     if (code === 'Escape') {
-        if (currentState === STATE.INV) toggleInventory();
-        else if (currentState === STATE.PLAYING) {
+        // ESC现在可以关闭交互UI
+        if (currentState === STATE.INTERACTING) {
+            closeInteractionUI();
+        } else if (currentState === STATE.PLAYING) {
             currentState = STATE.PAUSED;
             document.exitPointerLock();
             updateUI();
@@ -523,7 +590,6 @@ function onKeyUp(e) {
     if (code === 'Space') keys.space = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') keys.shift = false;
     if (code === 'ControlLeft' || code === 'ControlRight') keys.ctrl = false;
-    if (code === 'KeyE') keyLocks.e = false;
     if (code === 'KeyO') keyLocks.o = false;
     if (code === 'KeyB') keyLocks.b = false;
 }
@@ -533,6 +599,28 @@ function onMouseMove(e) {
     player.yaw -= e.movementX * CONFIG.sensitivity;
     player.pitch -= e.movementY * CONFIG.sensitivity;
     player.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, player.pitch));
+}
+
+// 新增：鼠标按下处理
+function onMouseDown(e) {
+    if (currentState !== STATE.PLAYING) return;
+
+    if (e.button === 2) { // 右键
+        if (!keyLocks.mouseRight) {
+            attemptInteract();
+            keyLocks.mouseRight = true;
+        }
+    }
+    // e.button === 0 是左键，用于拖拽已在UI中的物品
+}
+
+// 新增：鼠标释放处理
+function onMouseUp(e) {
+    if (e.button === 2) { // 右键
+        keyLocks.mouseRight = false;
+    }
+    // 处理UI中的拖拽放置逻辑
+    handleDrop(e);
 }
 
 function onWheel(e) {
@@ -565,10 +653,83 @@ function createUI() {
     // 创建笔记本 UI（B键触发）
     createNotebookUI();
     
-    // 创建背包 UI（E键触发）
+    // 创建背包 UI（E键触发 - 现在用于关闭交互UI）
     createInventoryUI();
     
     updateUI();
+}
+
+// 新增：创建交互UI
+function createInteractionUI() {
+    if (document.getElementById('interactionUI')) return;
+    
+    interactionUI = document.createElement('div');
+    interactionUI.id = 'interactionUI';
+    Object.assign(interactionUI.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '800px', // 更宽以容纳两个网格
+        minHeight: '400px',
+        border: '2px solid #00FFFF',
+        background: 'rgba(20,20,20,0.95)',
+        padding: '20px',
+        display: 'none',
+        zIndex: 1002,
+        pointerEvents: 'auto',
+        fontFamily: '"Microsoft YaHei", "Courier New", monospace',
+        color: '#FFF'
+    });
+
+    const title = document.createElement('h2');
+    title.textContent = '箱子 - 与背包互动';
+    title.style.color = '#00FFFF';
+    title.style.textAlign = 'center';
+    title.style.marginTop = '0';
+    interactionUI.appendChild(title);
+
+    // 创建两个并排的网格容器
+    const gridsContainer = document.createElement('div');
+    gridsContainer.style.display = 'flex';
+    gridsContainer.style.justifyContent = 'space-around';
+    gridsContainer.style.gap = '20px';
+
+    // 箱子物品栏
+    const boxInvContainer = document.createElement('div');
+    boxInvContainer.innerHTML = '<h3 style="color:#FFD700;">箱子里</h3>';
+    boxInventoryGrid = document.createElement('div');
+    boxInventoryGrid.className = 'inventory-grid';
+    boxInventoryGrid.style.display = 'flex';
+    boxInventoryGrid.style.flexWrap = 'wrap';
+    boxInventoryGrid.style.justifyContent = 'center';
+    boxInventoryGrid.style.gap = '5px';
+    boxInvContainer.appendChild(boxInventoryGrid);
+    gridsContainer.appendChild(boxInvContainer);
+
+    // 玩家背包物品栏
+    const playerInvContainer = document.createElement('div');
+    playerInvContainer.innerHTML = '<h3 style="color:#FFD700;">你的背包</h3>';
+    playerInventoryGrid = document.createElement('div');
+    playerInventoryGrid.className = 'inventory-grid';
+    playerInventoryGrid.style.display = 'flex';
+    playerInventoryGrid.style.flexWrap = 'wrap';
+    playerInventoryGrid.style.justifyContent = 'center';
+    playerInventoryGrid.style.gap = '5px';
+    playerInvContainer.appendChild(playerInventoryGrid);
+    gridsContainer.appendChild(playerInvContainer);
+
+    interactionUI.appendChild(gridsContainer);
+
+    const hint = document.createElement('div');
+    hint.textContent = '提示：按 E 或 Esc 关闭 | 左键拖拽物品';
+    hint.style.textAlign = 'center';
+    hint.style.marginTop = '10px';
+    hint.style.fontSize = '14px';
+    hint.style.color = '#AAA';
+    interactionUI.appendChild(hint);
+
+    document.body.appendChild(interactionUI);
 }
 
 function createMapUI() {
@@ -700,8 +861,8 @@ function createInventoryUI() {
     grid.style.flexWrap = 'wrap';
     grid.style.justifyContent = 'center';
     
-    const items = ["撬棍", "胶带", "钥匙", "地图", "照片", "打火机", "纸条", "收音机", "空位"];
-    items.forEach((name, idx) => {
+    // 清空初始物品，创建空槽位
+    for (let idx = 0; idx < 9; idx++) {
         const item = document.createElement('div');
         item.className = 'inventory-item';
         item.style.width = '70px';
@@ -720,7 +881,7 @@ function createInventoryUI() {
         
         if (idx === selectedSlot) item.style.border = '3px solid #FFF';
         
-        item.innerHTML = `<div>${name}</div><div style="font-size:10px;margin-top:5px">[${idx+1}]</div>`;
+        item.innerHTML = `<div style="font-size:10px;margin-top:5px">[${idx+1}]</div>`; // 空槽
         
         item.addEventListener('click', () => {
             document.querySelectorAll('.inventory-item').forEach(el => {
@@ -731,10 +892,157 @@ function createInventoryUI() {
         });
         
         grid.appendChild(item);
-    });
+    }
     
     inventoryUI.appendChild(grid);
     document.body.appendChild(inventoryUI);
+}
+
+// 新增：尝试与最近的物体交互
+function attemptInteract() {
+    let closestObj = null;
+    let closestDist = Infinity;
+
+    // 检查是否靠近箱子
+    for (const box of boxes) {
+        const dx = player.pos.x - box.x;
+        const dz = player.pos.z - box.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < CONFIG.interactionDistance * CONFIG.interactionDistance && distSq < closestDist) {
+            closestDist = distSq;
+            closestObj = box;
+        }
+    }
+
+    if (closestObj) {
+        openInteractionUI(closestObj.id);
+    }
+}
+
+// 新增：打开交互UI
+function openInteractionUI(targetId) {
+    if (currentState === STATE.PLAYING) {
+        currentState = STATE.INTERACTING;
+        document.exitPointerLock(); // 解锁鼠标以便操作UI
+        currentInteractionTarget = targetId;
+        interactionUI.style.display = 'block';
+        refreshInteractionUI();
+    }
+}
+
+// 新增：刷新交互UI显示
+function refreshInteractionUI() {
+    if (!interactionUI || !currentInteractionTarget) return;
+
+    // 清空现有物品
+    boxInventoryGrid.innerHTML = '';
+    playerInventoryGrid.innerHTML = '';
+
+    // 填充箱子物品
+    const boxItems = boxInventories[currentInteractionTarget] || Array(9).fill(null);
+    boxItems.forEach((item, idx) => {
+        const slot = createItemSlot(item, 'box', idx);
+        boxInventoryGrid.appendChild(slot);
+    });
+
+    // 填充玩家背包物品
+    playerInventory.forEach((item, idx) => {
+        const slot = createItemSlot(item, 'player', idx);
+        playerInventoryGrid.appendChild(slot);
+    });
+}
+
+// 新增：创建物品槽位元素
+function createItemSlot(itemData, owner, index) {
+    const slot = document.createElement('div');
+    slot.className = 'inventory-item';
+    slot.style.width = '60px';
+    slot.style.height = '60px';
+    slot.style.margin = '5px';
+    slot.style.border = '1px solid #555';
+    slot.style.background = '#111';
+    slot.style.color = '#888';
+    slot.style.display = 'flex';
+    slot.style.flexDirection = 'column';
+    slot.style.alignItems = 'center';
+    slot.style.justifyContent = 'center';
+    slot.style.cursor = 'pointer';
+    slot.style.fontSize = '14px';
+    slot.dataset.owner = owner;
+    slot.dataset.index = index;
+
+    if (itemData) {
+        slot.innerHTML = `<div>${itemData.icon}</div><div style="font-size:10px;max-width: 100%;overflow: hidden;">${itemData.name}</div>`;
+        slot.style.color = '#FFF';
+        slot.draggable = true;
+        slot.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', `${owner},${index}`);
+        });
+    } else {
+        slot.innerHTML = '<div style="font-size:10px;">[空]</div>';
+    }
+
+    return slot;
+}
+
+// 新增：处理拖拽放置
+function handleDrop(e) {
+    if (currentState !== STATE.INTERACTING) return;
+    
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data) return;
+
+    const [sourceOwner, sourceIndexStr] = data.split(',');
+    const sourceIndex = parseInt(sourceIndexStr);
+    if (isNaN(sourceIndex)) return;
+
+    // 获取放置的目标槽位
+    const target = e.target.closest('.inventory-item');
+    if (!target || !target.dataset.owner || !target.dataset.index) return;
+
+    const targetOwner = target.dataset.owner;
+    const targetIndex = parseInt(target.dataset.index);
+    if (isNaN(targetIndex)) return;
+
+    // 防止拖到自己身上
+    if (sourceOwner === targetOwner && sourceIndex === targetIndex) return;
+
+    let sourceArray, targetArray;
+    if (sourceOwner === 'box') sourceArray = boxInventories[currentInteractionTarget];
+    else if (sourceOwner === 'player') sourceArray = playerInventory;
+    else return;
+
+    if (targetOwner === 'box') targetArray = boxInventories[currentInteractionTarget];
+    else if (targetOwner === 'player') targetArray = playerInventory;
+    else return;
+
+    if (!sourceArray || !targetArray) return;
+
+    // 移动物品
+    const item = sourceArray[sourceIndex];
+    // 检查目标槽位是否为空
+    if (targetArray[targetIndex] === null) {
+        targetArray[targetIndex] = item;
+        sourceArray[sourceIndex] = null;
+    } else {
+        // 如果不为空，则交换
+        const temp = targetArray[targetIndex];
+        targetArray[targetIndex] = item;
+        sourceArray[sourceIndex] = temp;
+    }
+
+    // 刷新UI
+    refreshInteractionUI();
+}
+
+// 新增：关闭交互UI
+function closeInteractionUI() {
+    if (currentState === STATE.INTERACTING) {
+        currentState = STATE.PLAYING;
+        setTimeout(() => renderer.domElement.requestPointerLock(), 50);
+        interactionUI.style.display = 'none';
+        currentInteractionTarget = null;
+    }
 }
 
 // 更新地图位置（核心：实时映射玩家坐标到小地图）
@@ -770,25 +1078,20 @@ function toggleNotebook() {
     }
 }
 
-// 开关背包
+// 开关背包 (修改：现在只用于关闭交互UI)
 function toggleInventory() {
-    if (currentState === STATE.PLAYING) {
-        currentState = STATE.INV;
-        document.exitPointerLock();
-        inventoryUI.style.display = 'block';
-    } else if (currentState === STATE.INV) {
-        currentState = STATE.PLAYING;
-        setTimeout(() => renderer.domElement.requestPointerLock(), 50);
-        inventoryUI.style.display = 'none';
+    // 保持原有逻辑，但目前E键只用于关闭交互UI
+    if (currentState === STATE.INTERACTING) {
+        closeInteractionUI();
     }
-    updateUI();
+    // 不再打开普通背包UI
 }
 
 function updateUI() {
     uiContainer.innerHTML = '';
-    uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV) ? 'auto' : 'none';
+    uiContainer.style.pointerEvents = (currentState === STATE.MENU || currentState === STATE.PAUSED || currentState === STATE.INV || currentState === STATE.INTERACTING) ? 'auto' : 'none';
 
-    if (currentState === STATE.PLAYING || currentState === STATE.INV) {
+    if (currentState === STATE.PLAYING || currentState === STATE.INV || currentState === STATE.INTERACTING) {
         let dirStr = "静止";
         if (keys.w) dirStr = "前进 ↑";
         if (keys.s) dirStr = "后退 ↓";
@@ -853,7 +1156,7 @@ function drawOverlay(title, btns) {
 
 function startGame() {
     currentState = STATE.PLAYING;
-    player.pos.set(0, 2, 0);
+    // 玩家位置已在createWorld中设置
     player.vel.set(0,0,0);
     player.yaw = 0;
     updateUI();
@@ -865,6 +1168,16 @@ function resumeGame() {
     setTimeout(() => renderer.domElement.requestPointerLock(), 50);
 }
 function goToMenu() {
+    // 关闭可能开启的UI
+    if (currentState === STATE.INTERACTING) {
+        closeInteractionUI();
+    }
+    if (notebookEl.style.display === 'block') {
+        notebookEl.style.display = 'none';
+    }
+    if (inventoryUI.style.display === 'block') {
+        inventoryUI.style.display = 'none';
+    }
     currentState = STATE.MENU;
     document.exitPointerLock();
     updateUI();
