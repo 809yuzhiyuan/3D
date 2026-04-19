@@ -21,7 +21,7 @@ const CONFIG = {
     jumpForce: 12.0,
     gravity: 40.0,
     sensitivity: 0.002, 
-    interactionDistance: 5.0, // 修改：增加交互/拾取距离
+    interactionDistance: 50.0, // 修改：增加交互/拾取距离
     pickUpDistance: 2.0,      // 保留此参数，以防未来需要区分
 
     // 房子
@@ -37,7 +37,7 @@ const CONFIG = {
     cWall: 0xFFFFFF,
     cDoor: 0xFF0055,
     cGrid: 0x00FFFF,
-    cStair: 0xFFAA00,
+    cStair: 0x00AAFF,
     cBox: 0x8B4513 // 新增：箱子颜色 (棕色)
 };
 
